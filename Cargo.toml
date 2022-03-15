@@ -1,0 +1,29 @@
+[package]
+name = "strange-attractor-renderer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "strange-attractor-renderer"
+path = "src/bin/main.rs"
+required-features = ["bin"]
+
+[dependencies]
+image = { version = "0.24", default-features = false, features = ["png", "pnm"] }
+rand = { version = "0.8", features = ["small_rng"] }
+
+[features]
+default = ["bin"]
+bin = []
+
+# Build with `--profile production`
+[profile.production]
+inherits = "release"
+lto = true
+opt-level = "s"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
