@@ -18,9 +18,7 @@ rand = { version = "0.8", features = ["small_rng"] }
 default = ["bin"]
 bin = []
 
-# Build with `--profile production`
-[profile.production]
-inherits = "release"
+[profile.release]
 lto = true
 opt-level = "s"
 
