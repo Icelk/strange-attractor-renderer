@@ -7,9 +7,7 @@ use clap::{Arg, ArgGroup, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::DynamicImage;
 use strange_attractor_renderer::render_parallel;
-use strange_attractor_renderer::{
-    self, colorize, config::Config, config::RenderKind, render, Runtime,
-};
+use strange_attractor_renderer::{self, config::Config, config::RenderKind};
 
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
 where

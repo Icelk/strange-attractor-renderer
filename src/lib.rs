@@ -1,3 +1,36 @@
+//! # Pipeline
+//!
+//! First you need to get a [`Config`].
+//! I suggest creating it like this:
+//!
+//! ```
+//! # use strange_attractor_renderer::*;
+//! let config = Config {
+//!     iterations: 100_000_000,
+//!     ..Default::default()
+//! };
+//! ```
+//!
+//! ## Multithreaded
+//!
+//! Call [`render_parallel`].
+//!
+//! This benefits the most when the number of iterations is much higher than the dimensions of the
+//! image. The gap closes rapidly when the relation is < 25. This also consumes more memory, as we
+//! need a set of working images for each execution unit, usually the number of threads on your
+//! CPU. See [Performance](#performance) for more info.
+//!
+//! ## Single-threaded
+//!
+//! Create a [`Runtime`].
+//! Then [`render`] and finally [`colorize`].
+//!
+//! # Performance
+//!
+//! The thing slowing the algorithm down with larger image dimensions
+//! is the cache size - we're accessing a large image
+//! (2 megapixels) frequently, which gives us a memory bottleneck.
+
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(clippy::all, clippy::pedantic)]
 #![allow(clippy::inline_always)]
@@ -17,7 +50,8 @@ impl F64Ext for f64 {
     }
 }
 
-use config::{CoeffientList, Coeffients, Colors, Config, RenderKind};
+pub use config::Config;
+use config::{CoefficientList, Coefficients, Colors, RenderKind};
 use primitives::{EulerAxisRotation, Vec3};
 
 pub mod primitives {
@@ -136,7 +170,7 @@ pub mod config {
         pub render: RenderKind,
         pub transparent: bool,
 
-        pub coefficients: Coeffients,
+        pub coefficients: Coefficients,
         pub rotation: EulerAxisRotation,
         pub colors: Colors,
     }
@@ -150,7 +184,7 @@ pub mod config {
                 render: RenderKind::Gas,
                 transparent: true,
 
-                coefficients: Coeffients::default(),
+                coefficients: Coefficients::default(),
                 rotation: EulerAxisRotation {
                     axis: Vec3 {
                         x: 0.304_289_493_528_802,
@@ -165,14 +199,14 @@ pub mod config {
     }
 
     #[derive(Debug, Clone)]
-    pub struct CoeffientList {
+    pub struct CoefficientList {
         pub list: [f64; 10],
     }
     #[derive(Clone)]
-    pub struct Coeffients {
-        pub x: CoeffientList,
-        pub y: CoeffientList,
-        pub z: CoeffientList,
+    pub struct Coefficients {
+        pub x: CoefficientList,
+        pub y: CoefficientList,
+        pub z: CoefficientList,
 
         /// The position to center the camera on
         ///
@@ -182,7 +216,7 @@ pub mod config {
         /// Takes delta, screen space, and settings.
         pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
     }
-    impl Debug for Coeffients {
+    impl Debug for Coefficients {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_struct("Coeffients")
                 .field("x", &self.x)
@@ -193,21 +227,21 @@ pub mod config {
                 .finish()
         }
     }
-    impl Default for Coeffients {
+    impl Default for Coefficients {
         fn default() -> Self {
             Self {
-                x: CoeffientList {
+                x: CoefficientList {
                     list: [
                         0.021, 1.182, -1.183, 0.128, -1.12, -0.641, -1.152, -0.834, -0.97, 0.722,
                     ],
                 },
-                y: CoeffientList {
+                y: CoefficientList {
                     list: [
                         0.243_038, -0.825, -1.2, -0.835_443, -0.835_443, -0.364_557, 0.458,
                         0.622_785, -0.394_937, -1.032_911,
                     ],
                 },
-                z: CoeffientList {
+                z: CoefficientList {
                     list: [
                         -0.455_696, 0.673, 0.915, -0.258_228, -0.495, -0.264, -0.432, -0.416,
                         -0.877, -0.3,
@@ -256,14 +290,14 @@ pub mod config {
     }
 
     pub mod defaults {
-        use super::{Coeffients, Vec3};
+        use super::{Coefficients, Vec3};
         use std::f64::consts::PI;
 
         #[must_use]
         #[inline(always)]
-        pub fn color_transform(delta: Vec3, screen_space: Vec3, coeffs: &Coeffients) -> f64 {
+        pub fn color_transform(delta: Vec3, screen_space: Vec3, coeffs: &Coefficients) -> f64 {
             #[inline(always)]
-            fn part(p: Vec3, coeffs: &Coeffients) -> f64 {
+            fn part(p: Vec3, coeffs: &Coefficients) -> f64 {
                 #[allow(unused)] // clarity
                 const RADIAN_45_5: f64 = 91. * PI / 360.;
                 /// [`RADIAN_45_5`].cos()
@@ -309,9 +343,9 @@ pub type FinalImage = ImageBuffer<Rgba<u16>, Vec<u16>>;
 /// (using polynomials) with a set of coefficients.
 #[inline(always)]
 #[must_use]
-pub fn next_point(p: Vec3, coefficients: &Coeffients) -> Vec3 {
+pub fn next_point(p: Vec3, coefficients: &Coefficients) -> Vec3 {
     #[inline(always)]
-    fn sum_coefficients(polynomials: &[f64; 10], coefficients: &CoeffientList) -> f64 {
+    fn sum_coefficients(polynomials: &[f64; 10], coefficients: &CoefficientList) -> f64 {
         let mut sum = 0.;
         for i in 0..10 {
             unsafe {
@@ -364,6 +398,10 @@ pub fn color(value: f64, colors: &Colors) -> Rgb<f64> {
     ])
 }
 
+/// Stores data used by the algorithm.
+///
+/// This enables us to reuse memory.
+#[must_use]
 pub struct Runtime {
     count: ImageBuffer<Luma<u32>, Vec<u32>>,
     steps: ImageBuffer<Luma<f64>, Vec<f64>>,
@@ -373,7 +411,6 @@ pub struct Runtime {
     rng: rand::rngs::SmallRng,
 }
 impl Runtime {
-    #[must_use]
     pub fn new(config: &Config) -> Self {
         Self {
             count: ImageBuffer::new(config.width, config.height),
@@ -387,7 +424,9 @@ impl Runtime {
     fn image_identity<T: Pixel>() -> ImageBuffer<T, Vec<T::Subpixel>> {
         ImageBuffer::from_raw(0, 0, Vec::new()).unwrap()
     }
-    fn reset(&mut self) {
+    /// Reset this runtime.
+    #[allow(clippy::missing_panics_doc)] // doesn't happen
+    pub fn reset(&mut self) {
         let width = self.count.width();
         let height = self.count.height();
         let count = mem::replace(&mut self.count, Self::image_identity());
@@ -411,10 +450,10 @@ impl Runtime {
     /// # Panics
     ///
     /// Panics if the dimensions of `self` isn't the same as the dimensions of `other`.
-    #[must_use]
     pub fn merge(mut self, other: &Self) -> Self {
         assert_eq!(self.steps.width(), other.steps.width());
         assert_eq!(self.steps.height(), other.steps.height());
+
         for x in 0..(self.steps.width()) {
             for y in 0..(self.steps.height()) {
                 unsafe {
@@ -431,7 +470,6 @@ impl Runtime {
 
                 let zbuf_pix1 = unsafe { self.zbuf.unsafe_get_pixel(x, y) };
                 let zbuf_pix2 = unsafe { other.zbuf.unsafe_get_pixel(x, y) };
-                #[allow(clippy::cast_possible_truncation)]
                 if zbuf_pix2.0[0] > zbuf_pix1.0[0] {
                     unsafe {
                         let other_step = other.steps.unsafe_get_pixel(x, y);
@@ -445,11 +483,13 @@ impl Runtime {
         self
     }
 }
-/// `rotation` is around [`Coeffients::center_camera`], in radians.
+/// Render according to `config`, with angle `rotation` around the attractor.
+/// If the [`Runtime`] isn't [cleared](Runtime::clear), this just continues the "building" of the
+/// image. This can therefore be called in succession and the result is an ever-improving image.
+///
+/// `rotation` is around [`Coefficients::center_camera`], in radians.
 #[allow(clippy::many_single_char_names)]
 pub fn render(config: &Config, runtime: &mut Runtime, rotation: f64) {
-    runtime.reset();
-
     let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
     for _ in 0..1000 {
         initial_point = next_point(initial_point, &config.coefficients);
