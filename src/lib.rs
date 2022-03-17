@@ -1,12 +1,12 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![deny(clippy::all)]
-#![deny(clippy::pedantic)]
+#![deny(clippy::all, clippy::pedantic)]
+#![allow(clippy::inline_always)]
 
 use std::f64::consts::PI;
 use std::mem;
 use std::ops::{Index, Sub};
 
-use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgba};
+use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba};
 use rand::{Rng, SeedableRng};
 
 pub trait F64Ext {
@@ -26,8 +26,14 @@ pub struct Vec3 {
     pub z: f64,
 }
 impl Vec3 {
+    #[must_use]
+    pub fn new(x: f64, y: f64, z: f64) -> Self {
+        Self { x, y, z }
+    }
+
     /// Length of this vector.
     #[must_use]
+    #[inline(always)]
     pub fn magnitude(self) -> f64 {
         (self.x.square() + self.y.square() + self.z.square()).sqrt()
     }
@@ -50,6 +56,7 @@ pub struct EulerAxisRotation {
 }
 impl EulerAxisRotation {
     #[must_use]
+    #[inline(always)]
     pub fn to_rotation_matrix(self) -> Matrix3x3 {
         let Self { axis, rotation } = self;
         let Vec3 { x, y, z } = axis;
@@ -72,6 +79,7 @@ pub struct Matrix3x3 {
 }
 impl Matrix3x3 {
     #[must_use]
+    #[inline(always)]
     pub fn mul_right(&self, vec: Vec3) -> Vec3 {
         let m = self.columns;
         Vec3 {
@@ -83,15 +91,24 @@ impl Matrix3x3 {
 }
 impl Index<(usize, usize)> for Matrix3x3 {
     type Output = f64;
+    #[inline(always)]
     fn index(&self, index: (usize, usize)) -> &Self::Output {
         &self.columns[index.0][index.1]
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum RenderKind {
+    Gas,
+    Depth,
+}
 pub struct Config {
     pub iterations: usize,
     pub width: u32,
     pub height: u32,
+
+    pub render: RenderKind,
+    pub transparent: bool,
 
     pub coefficients: Coeffients,
     pub rotation: EulerAxisRotation,
@@ -103,6 +120,9 @@ impl Default for Config {
             iterations: 10_000_000,
             width: 1920,
             height: 1080,
+
+            render: RenderKind::Gas,
+            transparent: true,
 
             coefficients: Coeffients::default(),
             rotation: EulerAxisRotation {
@@ -118,7 +138,9 @@ impl Default for Config {
     }
 }
 #[must_use]
+#[inline(always)]
 pub fn default_color_transform(delta: Vec3, screen_space: Vec3, coeffs: &Coeffients) -> f64 {
+    #[inline(always)]
     fn part(p: Vec3, coeffs: &Coeffients) -> f64 {
         #[allow(unused)] // clarity
         const RADIAN_45_5: f64 = 91. * PI / 360.;
@@ -133,7 +155,7 @@ pub fn default_color_transform(delta: Vec3, screen_space: Vec3, coeffs: &Coeffie
         #[allow(clippy::excessive_precision)]
         const SIN: f64 = 0.713_250_449_154_181_564_992_427_411_198_150_366_544_723_510_742_187_5;
 
-        let x2 = (p.x + coeffs.center_camera.0) * COS + (p.z + coeffs.center_camera.1) * SIN;
+        let x2 = (p.x + coeffs.center_camera.x) * COS + (p.z + coeffs.center_camera.y) * SIN;
         if x2 < -0.0839
             || 10.55 * x2 + p.y < 0.46 - 1.0941
             || 1.0426 * x2 + p.y < 0.179 - 0.1576
@@ -148,6 +170,11 @@ pub fn default_color_transform(delta: Vec3, screen_space: Vec3, coeffs: &Coeffie
     let color = (part(screen_space, coeffs) + delta.magnitude()) / 2.;
     (color - 0.1) / 0.9
 }
+#[inline(always)]
+#[must_use]
+pub fn default_brightness_function(value: f64) -> f64 {
+    ((value - 0.15) * (5. / 3.)).clamp(0., 1.)
+}
 pub struct CoeffientList {
     pub list: [f64; 10],
 }
@@ -156,10 +183,10 @@ pub struct Coeffients {
     pub y: CoeffientList,
     pub z: CoeffientList,
 
-    /// (x, y) on where to center the camera
+    /// The position to center the camera on
     ///
     /// Is highly related to which coefficients are chosen
-    pub center_camera: (f64, f64),
+    pub center_camera: Vec3,
 
     /// Takes delta, screen space, and settings.
     pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
@@ -186,14 +213,20 @@ impl Default for Coeffients {
             },
 
             /*
-             `TODO`: Add option to make first-pass to get these values, to then compute `center_camera`
-             `TODO`: add z coordinate to center_camera.
-            Attractor size of the above
-            xmin = -0.327770, xmax = 0.335278  width 0.66
-            ymin = -0.012949, ymax = 0.492107  width 0.50
-            zmin = -0.628829, zmax = 0.103010  width 0.73
+                `TODO`: Add option to make first-pass to get these values, to then compute `center_camera`
+
+                Attractor size of the above
+
+                xmin = -0.327770, xmax = 0.335278  width 0.66
+                ymin = -0.012949, ymax = 0.492107  width 0.50
+                zmin = -0.628829, zmax = 0.103010  width 0.73
             */
-            center_camera: (-0.005, 0.262),
+            center_camera: Vec3::new(
+                -0.005,
+                0.262,
+                /* mid point between z[min,max]. constant 0.12 works well, don't know why we need that */
+                -0.366 + 0.12,
+            ),
             transform_colors: default_color_transform,
         }
     }
@@ -201,8 +234,10 @@ impl Default for Coeffients {
 
 /// This is part of the general algorithm. We get the new coordinates by multiplying previous
 /// (using polynomials) with a set of coefficients.
+#[inline(always)]
 #[must_use]
 pub fn next_point(p: Vec3, coefficients: &Coeffients) -> Vec3 {
+    #[inline(always)]
     fn sum_coefficients(polynomials: &[f64; 10], coefficients: &CoeffientList) -> f64 {
         let mut sum = 0.;
         for i in 0..10 {
@@ -238,6 +273,8 @@ pub struct Colors {
     pub r: [f64; 7],
     pub g: [f64; 7],
     pub b: [f64; 7],
+
+    pub brighness_function: fn(f64) -> f64,
 }
 impl Default for Colors {
     fn default() -> Self {
@@ -245,30 +282,31 @@ impl Default for Colors {
             r: [1., 0.5, 1., 0.5, 0.5, 1., 1.],
             g: [1., 1., 0.5, 1., 0.5, 0.5, 0.5],
             b: [0.5, 0.5, 0.5, 1., 1., 1., 1.],
+
+            brighness_function: default_brightness_function,
         }
     }
 }
 /// `value` is position in color wheel, in the range [0..1)
 #[must_use]
-pub fn color(value: f64, colors: &Colors) -> Rgba<f64> {
-    let Colors { r, g, b } = colors;
+#[inline(always)]
+pub fn color(value: f64, colors: &Colors) -> Rgb<f64> {
+    let Colors {
+        r,
+        g,
+        b,
+        brighness_function: _,
+    } = colors;
     let value = value * 6.;
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let n = (value.floor()) as usize;
-    // let sub_n_offset = value % 1.;
-    #[allow(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss
-    )]
-    let sub_n_offset = (value - n as f64);
+    let sub_n_offset = value % 1.;
     let sub_n_offset_1 = 1.0 - sub_n_offset;
-    Rgba([
+    Rgb([
         // lerp between colours
         (r[n + 1] * sub_n_offset + r[n] * sub_n_offset_1).sqrt(),
         (g[n + 1] * sub_n_offset + g[n] * sub_n_offset_1).sqrt(),
         (b[n + 1] * sub_n_offset + b[n] * sub_n_offset_1).sqrt(),
-        1.,
     ])
 }
 
@@ -327,9 +365,9 @@ pub fn render(
         z: runtime.rng.gen::<f64>() * 0.1,
     };
     // let mut initial_point = Vec3 {
-        // x: 0.3,
-        // y: 0.1,
-        // z: 0.1,
+    // x: 0.3,
+    // y: 0.1,
+    // z: 0.1,
     // };
     for _ in 0..1000 {
         initial_point = next_point(initial_point, &config.coefficients);
@@ -339,6 +377,7 @@ pub fn render(
     let sin_v = rotation.sin();
     let cos_v = rotation.cos();
     let center_camera = config.coefficients.center_camera;
+    let brighness_function = config.colors.brighness_function;
     #[allow(clippy::cast_lossless)]
     let width = config.width as f64;
     #[allow(clippy::cast_lossless)]
@@ -356,19 +395,25 @@ pub fn render(
 
         // rotate around center_camera
         let x2 =
-            (screen_space.x + center_camera.0) * cos_v + (screen_space.z + center_camera.1) * sin_v;
+            (screen_space.x + center_camera.x) * cos_v + (screen_space.z + center_camera.y) * sin_v;
         let z2 =
-            (screen_space.x + center_camera.0) * sin_v - (screen_space.z + center_camera.1) * cos_v;
+            (screen_space.x + center_camera.x) * sin_v - (screen_space.z + center_camera.y) * cos_v;
 
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let i = ((0.5 - x2) * width) as u32;
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        let j = ((0.5 - screen_space.y + 0.04) * width) as u32;
+        let i = (0.5 - x2) * width;
+        let j = height / 2. - (screen_space.y + center_camera.z) * width;
 
-        if i >= config.width || j >= config.height {
+        if i >= width || j >= height || i < 0. || j < 0. {
             continue;
         }
 
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let i = i as u32;
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let j = j as u32;
+
+        // unsafe because we use unsafe functions to get pixel values without checking bounds of
+        // inner slice. We know the values are within bounds, as by the if ... { continue; } block
+        // above.
         unsafe {
             let mut pixel = runtime.count.unsafe_get_pixel(i, j);
             // `.0[0]` since the pixel is wrapped in a `Luma`, which contains a unnamed slice (`.0`),
@@ -402,6 +447,8 @@ pub fn render(
     #[allow(clippy::cast_lossless)]
     let u16_max = u16::MAX as f64;
 
+    println!("Began colouring");
+
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -413,43 +460,28 @@ pub fn render(
         .enumerate_pixels()
         .zip(runtime.count.pixels().zip(runtime.zbuf.pixels()))
     {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss
-        )]
-        // let z = (2.0f32.powf(z.0[0]) * u16::MAX as f32) as u16;
         let color = color(steps.0[0], &config.colors);
-        let [r, g, b, a] = color.0;
-        let z = (count.0[0] as f64).log(max as f64);
-        let c = steps.0[0];
-        // if count.0[0] > 5 {
-        // println!(
-        // "Pixel: {:?} ({x}, {y}), z: {z}, r: {}",
-        // color.0,
-        // (r * z * u16_max) as u16
-        // );
-        // }
-        let pixel = Rgba([
-            (r * z * u16_max) as _,
-            (g * z * u16_max) as _,
-            (b * z * u16_max) as _,
-            // (c * z * u16_max) as _,
-            // (c * z * u16_max) as _,
-            // (c * z * u16_max) as _,
-            (a * u16_max) as _,
-        ]);
-        image.put_pixel(x, y, pixel);
+        let [r, g, b] = color.0;
+        let factor = (count.0[0] as f64).log(max as f64);
+        let pixel = match config.render {
+            RenderKind::Gas => Rgba([
+                (brighness_function(r * factor) * u16_max) as _,
+                (brighness_function(g * factor) * u16_max) as _,
+                (brighness_function(b * factor) * u16_max) as _,
+                if config.transparent {
+                    (factor * u16_max) as u16
+                } else {
+                    u16::MAX
+                },
+            ]),
+            RenderKind::Depth => {
+                let z = ((2.0f32.powf(z.0[0]) - 0.5) * u16::MAX as f32) as u16;
+                Rgba([z, z, z, u16::MAX])
+            }
+        };
+        // safety: `image` has the same size as all the others
+        unsafe { image.unsafe_put_pixel(x, y, pixel) };
     }
 
     image
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
 }
