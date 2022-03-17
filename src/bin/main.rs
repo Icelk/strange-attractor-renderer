@@ -6,7 +6,9 @@ use std::str::FromStr;
 use clap::{Arg, ArgGroup, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::DynamicImage;
-use strange_attractor_renderer::{self, render, Config, RenderKind, Runtime};
+use strange_attractor_renderer::{
+    self, colorize, config::Config, config::RenderKind, render, Runtime,
+};
 
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
 where
@@ -154,7 +156,8 @@ fn main() {
     }
 
     let mut runtime = Runtime::new(&config);
-    let image = render(&config, &mut runtime, 0.);
+    render(&config, &mut runtime, 0.);
+    let image = colorize(&config, &runtime);
     let image = DynamicImage::ImageRgba16(image);
 
     let image = match (config.transparent, matches.is_present("8bit")) {
