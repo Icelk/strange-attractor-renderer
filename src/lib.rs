@@ -117,6 +117,8 @@ pub mod primitives {
 }
 
 pub mod config {
+    use std::fmt::{self, Debug};
+
     use super::{EulerAxisRotation, Vec3};
 
     #[derive(Debug, Clone)]
@@ -125,6 +127,7 @@ pub mod config {
         Depth,
     }
 
+    #[derive(Debug, Clone)]
     pub struct Config {
         pub iterations: usize,
         pub width: u32,
@@ -161,9 +164,11 @@ pub mod config {
         }
     }
 
+    #[derive(Debug, Clone)]
     pub struct CoeffientList {
         pub list: [f64; 10],
     }
+    #[derive(Clone)]
     pub struct Coeffients {
         pub x: CoeffientList,
         pub y: CoeffientList,
@@ -176,6 +181,17 @@ pub mod config {
 
         /// Takes delta, screen space, and settings.
         pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
+    }
+    impl Debug for Coeffients {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Coeffients")
+                .field("x", &self.x)
+                .field("y", &self.y)
+                .field("z", &self.z)
+                .field("center_camera", &self.center_camera)
+                .field("transform_colors", &"fn")
+                .finish()
+        }
     }
     impl Default for Coeffients {
         fn default() -> Self {
@@ -219,6 +235,7 @@ pub mod config {
     }
 
     /// Each of the slices should have their last and second to last be the same.
+    #[derive(Debug, Clone)]
     pub struct Colors {
         pub r: [f64; 7],
         pub g: [f64; 7],
@@ -285,6 +302,8 @@ pub mod config {
         }
     }
 }
+
+pub type FinalImage = ImageBuffer<Rgba<u16>, Vec<u16>>;
 
 /// This is part of the general algorithm. We get the new coordinates by multiplying previous
 /// (using polynomials) with a set of coefficients.
@@ -503,7 +522,7 @@ pub fn render(config: &Config, runtime: &mut Runtime, rotation: f64) {
     }
 }
 #[must_use]
-pub fn colorize(config: &Config, runtime: &Runtime) -> ImageBuffer<Rgba<u16>, Vec<u16>> {
+pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     let brighness_function = config.colors.brighness_function;
     let mut image = ImageBuffer::new(config.width, config.height);
 
@@ -547,4 +566,39 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> ImageBuffer<Rgba<u16>, Ve
     }
 
     image
+}
+
+#[allow(clippy::missing_panics_doc)] // it won't panic
+#[must_use]
+pub fn render_parallel(mut config: Config, rotation: f64) -> FinalImage {
+    let num_threads = std::thread::available_parallelism()
+        .unwrap_or(std::num::NonZeroUsize::new(8).unwrap())
+        .get();
+
+    let iterations = config.iterations;
+    config.iterations = iterations / num_threads;
+
+    let mut threads = Vec::with_capacity(num_threads);
+
+    for _ in 0..num_threads {
+        let config = config.clone();
+        let handle = std::thread::spawn(move || {
+            let mut runtime = Runtime::new(&config);
+            println!("Rendering");
+            render(&config, &mut runtime, rotation);
+            println!("Rendered");
+            runtime
+        });
+
+        threads.push(handle);
+    }
+
+    let mut iter = threads.into_iter();
+    // UNWRAP: `available_parallelism` is guaranteed to always return >0
+    let mut current = iter.next().unwrap().join().expect("thread panicked");
+    for thread in iter {
+        let runtime = thread.join().expect("thread panicked");
+        current = current.merge(&runtime);
+    }
+    colorize(&config, &current)
 }

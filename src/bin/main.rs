@@ -6,6 +6,7 @@ use std::str::FromStr;
 use clap::{Arg, ArgGroup, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::DynamicImage;
+use strange_attractor_renderer::render_parallel;
 use strange_attractor_renderer::{
     self, colorize, config::Config, config::RenderKind, render, Runtime,
 };
@@ -155,9 +156,10 @@ fn main() {
         exit(1);
     }
 
-    let mut runtime = Runtime::new(&config);
-    render(&config, &mut runtime, 0.);
-    let image = colorize(&config, &runtime);
+    // let mut runtime = Runtime::new(&config);
+    // render(&config, &mut runtime, 0.);
+    // let image = colorize(&config, &runtime);
+    let image = render_parallel(config.clone(), 0.);
     let image = DynamicImage::ImageRgba16(image);
 
     let image = match (config.transparent, matches.is_present("8bit")) {
