@@ -154,10 +154,7 @@ fn main() {
         exit(1);
     }
 
-    // let mut runtime = Runtime::new(&config);
-    // render(&config, &mut runtime, 0.);
-    // let image = colorize(&config, &runtime);
-    let image = render_parallel(config.clone(), 0.);
+    let image = render_parallel(config.clone(), 0., 12);
     let image = DynamicImage::ImageRgba16(image);
 
     let image = match (config.transparent, matches.is_present("8bit")) {

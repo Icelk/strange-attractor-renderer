@@ -36,6 +36,8 @@
 #![allow(clippy::inline_always)]
 
 use std::mem;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{atomic, Arc};
 
 use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba};
 use rand::{Rng, SeedableRng};
@@ -608,25 +610,58 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     image
 }
 
+/// I recommend `16` for `jobs_per_thread`. If you get uneven images with low iteration counts, try
+/// `8`.
+///
+/// At relatively low rations between iterations and pixels (<50), this isn't much faster.
 #[allow(clippy::missing_panics_doc)] // it won't panic
 #[must_use]
-pub fn render_parallel(mut config: Config, rotation: f64) -> FinalImage {
+pub fn render_parallel(mut config: Config, rotation: f64, jobs_per_thread: usize) -> FinalImage {
     let num_threads = std::thread::available_parallelism()
         .unwrap_or(std::num::NonZeroUsize::new(8).unwrap())
         .get();
 
     let iterations = config.iterations;
-    config.iterations = iterations / num_threads;
+    config.iterations = iterations / num_threads / jobs_per_thread;
 
     let mut threads = Vec::with_capacity(num_threads);
 
+    // We keep a job counter to balance threads. If one is way slower, it'll "take" less jobs,
+    // which results in better runtime.
+    let job_counter = Arc::new(AtomicUsize::new(jobs_per_thread * num_threads));
     for _ in 0..num_threads {
         let config = config.clone();
+        let job_counter = Arc::clone(&job_counter);
         let handle = std::thread::spawn(move || {
             let mut runtime = Runtime::new(&config);
-            println!("Rendering");
-            render(&config, &mut runtime, rotation);
-            println!("Rendered");
+            println!("Rendering started on thread.");
+            loop {
+                // apply the function to check if we should continue.
+                // This also updates the atomic value.
+                //
+                // A `updated` valuable is needed to only decrement once.
+                let mut updated = false;
+                let more_to_do = job_counter
+                    .fetch_update(atomic::Ordering::SeqCst, atomic::Ordering::SeqCst, |v| {
+                        if v > 0 {
+                            if updated {
+                                Some(v)
+                            } else {
+                                println!("Iteration complete, {v} left to go.");
+                                updated = false;
+                                Some(v - 1)
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .is_ok();
+                if !more_to_do {
+                    break;
+                }
+                render(&config, &mut runtime, rotation);
+            }
+            println!("Rendered finished.");
             runtime
         });
 
