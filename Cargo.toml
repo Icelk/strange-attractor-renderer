@@ -11,7 +11,7 @@ path = "src/bin/main.rs"
 required-features = ["bin"]
 
 [dependencies]
-image = { version = "0.24", default-features = false, features = ["png", "pnm"] }
+image = { version = "0.24", default-features = false, features = ["png", "pnm", "bmp"] }
 rand = { version = "0.8", features = ["small_rng"] }
 
 # bin
@@ -19,10 +19,12 @@ clap = { version = "3", optional = true, features = ["cargo"] }
 clap_autocomplete = { version = "0.1", optional = true }
 
 [features]
-default = ["bin"]
-bin = ["clap", "clap_autocomplete"]
+default = ["bin", "complete"]
+bin = ["clap"]
+complete = ["clap_autocomplete"]
 
-[profile.release]
+[profile.production]
+inherits = "release"
 lto = true
 opt-level = "s"
 

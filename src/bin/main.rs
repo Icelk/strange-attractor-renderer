@@ -1,10 +1,11 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::str::FromStr;
 
-use clap::{Arg, Command, ValueHint};
-use image::codecs::{png, pnm};
-use image::{DynamicImage, ImageEncoder};
+use clap::{Arg, ArgGroup, Command, ValueHint};
+use image::codecs::{bmp, png, pnm};
+use image::DynamicImage;
 use strange_attractor_renderer::{self, render, Config, RenderKind, Runtime};
 
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
@@ -22,6 +23,9 @@ fn write_image(encoder: impl image::ImageEncoder, image: DynamicImage) {
             image.color(),
         )
         .unwrap();
+}
+fn file(path: impl AsRef<Path>) -> impl Write {
+    std::io::BufWriter::new(std::fs::File::create(path).unwrap())
 }
 
 fn main() {
@@ -70,12 +74,19 @@ fn main() {
                 .validator(parse_validate::<u32>)
                 .default_value("1080"),
         )
+        .group(ArgGroup::new("format").arg("pam").arg("bmp"))
         .arg(
             Arg::new("pam")
                 .long("pam")
                 .help("Use PAM format, a bitmap-like format")
                 .alias("pnm")
                 .alias("pbm"),
+        )
+        .arg(
+            Arg::new("bmp")
+                .long("bmp")
+                .help("Use BMP format")
+                .alias("bitmap"),
         )
         .arg(
             Arg::new("name")
@@ -86,11 +97,15 @@ fn main() {
                 .default_value("attractor"),
         );
 
-    command = clap_autocomplete::add_subcommand(command);
+    #[cfg(feature = "complete")]
+    {
+        command = clap_autocomplete::add_subcommand(command);
+    }
 
     let command_copy = command.clone();
     let matches = command.get_matches();
 
+    #[cfg(feature = "complete")]
     match clap_autocomplete::test_subcommand(&matches, command_copy) {
         Some(Ok(())) => {
             exit(1);
@@ -129,6 +144,15 @@ fn main() {
     } else {
         RenderKind::Gas
     };
+    if matches.is_present("pam") && !matches.is_present("8bit") {
+        eprintln!("16-bit images not supported when using PAM format.");
+        exit(1);
+    }
+    if matches.is_present("bmp") && !matches.is_present("8bit") {
+        eprintln!("16-bit images not supported when using BMP format.");
+        exit(1);
+    }
+
     let mut runtime = Runtime::new(&config);
     let image = render(&config, &mut runtime, 0.);
     let image = DynamicImage::ImageRgba16(image);
@@ -144,13 +168,19 @@ fn main() {
 
     if matches.is_present("pam") {
         name.set_extension("pam");
-        let mut file = std::fs::File::create(&name).unwrap();
+        let mut file = file(&name);
 
         let codec = pnm::PnmEncoder::new(&mut file).with_subtype(pnm::PnmSubtype::ArbitraryMap);
         write_image(codec, image);
+    } else if matches.is_present("bmp") {
+        name.set_extension("bmp");
+        let mut file = file(&name);
+
+        let encoder = bmp::BmpEncoder::new(&mut file);
+        write_image(encoder, image);
     } else {
         name.set_extension("png");
-        let mut file = std::fs::File::create(&name).unwrap();
+        let mut file = file(&name);
 
         let codec = png::PngEncoder::new_with_quality(
             &mut file,
