@@ -14,9 +14,13 @@ required-features = ["bin"]
 image = { version = "0.24", default-features = false, features = ["png", "pnm"] }
 rand = { version = "0.8", features = ["small_rng"] }
 
+# bin
+clap = { version = "3", optional = true, features = ["cargo"] }
+clap_autocomplete = { version = "0.1", optional = true }
+
 [features]
 default = ["bin"]
-bin = []
+bin = ["clap", "clap_autocomplete"]
 
 [profile.release]
 lto = true
