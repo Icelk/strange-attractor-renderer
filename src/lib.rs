@@ -28,8 +28,8 @@
 //! # Performance
 //!
 //! The thing slowing the algorithm down with larger image dimensions
-//! is the cache size - we're accessing a large image
-//! (2 megapixels) frequently, which gives us a memory bottleneck.
+//! is the cache size - and memory access. We basically do random access reads and writes on a
+//! often > 2 megapixel image. If the system memory is slow, this brings performance to a halt.
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 #![deny(clippy::all, clippy::pedantic)]
@@ -414,14 +414,16 @@ pub struct Runtime {
 }
 impl Runtime {
     pub fn new(config: &Config) -> Self {
-        Self {
+        let mut me = Self {
             count: ImageBuffer::new(config.width, config.height),
             steps: ImageBuffer::new(config.width, config.height),
             zbuf: ImageBuffer::new(config.width, config.height),
             max: 0,
 
             rng: rand::rngs::SmallRng::from_entropy(),
-        }
+        };
+        me.reset();
+        me
     }
     fn image_identity<T: Pixel>() -> ImageBuffer<T, Vec<T::Subpixel>> {
         ImageBuffer::from_raw(0, 0, Vec::new()).unwrap()
@@ -599,6 +601,7 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
                 },
             ]),
             RenderKind::Depth => {
+                // - 0.5 because 2^-1 (which is the smallest value), gives `0.5`.
                 let z = ((2.0f32.powf(z.0[0]) - 0.5) * u16::MAX as f32) as u16;
                 Rgba([z, z, z, u16::MAX])
             }

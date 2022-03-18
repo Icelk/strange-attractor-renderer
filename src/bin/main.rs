@@ -1,3 +1,4 @@
+use std::f64::consts::PI;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -154,7 +155,12 @@ fn main() {
         exit(1);
     }
 
-    let image = render_parallel(config.clone(), 0., 12);
+    // let image = {
+        // let mut rt = strange_attractor_renderer::Runtime::new(&config);
+        // strange_attractor_renderer::render(&config, &mut rt, 0.);
+        // strange_attractor_renderer::colorize(&config, &rt)
+    // };
+    let image = render_parallel(config.clone(), 45.*PI/180., 12);
     let image = DynamicImage::ImageRgba16(image);
 
     let image = match (config.transparent, matches.is_present("8bit")) {
