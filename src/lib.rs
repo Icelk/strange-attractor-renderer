@@ -566,6 +566,7 @@ pub fn render(config: &Config, runtime: &mut Runtime, rotation: f64) {
     }
 }
 #[must_use]
+#[allow(clippy::missing_panics_doc)]
 pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     let brighness_function = config.colors.brighness_function;
     let mut image = ImageBuffer::new(config.width, config.height);
@@ -573,12 +574,28 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     #[allow(clippy::cast_lossless)]
     let u16_max = u16::MAX as f64;
 
-    println!("Began colouring");
+    println!("Began colouring.");
 
+    let depth_info = if matches!(config.render, RenderKind::Depth) {
+        Some(
+            #[allow(clippy::float_cmp)] // the -1.0 value is set by us
+            runtime
+                .zbuf
+                .pixels()
+                .map(|pixel| pixel.0[0])
+                .filter(|p| *p != -1.0)
+                // have to use .fold instead of .max as `f32` doesn't implement Ord.
+                .fold((0.0f32, f32::MAX), |(a1, a2), p| (a1.max(p), a2.min(p))),
+        )
+    } else {
+        None
+    };
+    let depth_info = depth_info.map(|(a, b)| (a, b, (a - b)));
+
+    // ignore lints
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
         clippy::cast_lossless
     )]
     for ((x, y, steps), (count, z)) in runtime
@@ -588,7 +605,8 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     {
         let color = color(steps.0[0], &config.colors);
         let [r, g, b] = color.0;
-        let factor = (count.0[0] as f64).log(runtime.max as f64);
+        // add 1 to both to not get any logs of values under 1.
+        let factor = ((count.0[0] + 1) as f64).log((runtime.max + 1) as f64);
         let pixel = match config.render {
             RenderKind::Gas => Rgba([
                 (brighness_function(r * factor) * u16_max) as _,
@@ -601,8 +619,16 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
                 },
             ]),
             RenderKind::Depth => {
-                // - 0.5 because 2^-1 (which is the smallest value), gives `0.5`.
-                let z = ((2.0f32.powf(z.0[0]) - 0.5) * u16::MAX as f32) as u16;
+                let z = z.0[0];
+                #[allow(clippy::float_cmp)]
+                // if z hasn't changed from default, we return 0.
+                let z = if z == -1.0 {
+                    0.0
+                } else {
+                    let (_, min, diff) = depth_info.unwrap();
+                    (z - min) / diff
+                };
+                let z = (z * u16::MAX as f32) as u16;
                 Rgba([z, z, z, u16::MAX])
             }
         };
