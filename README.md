@@ -51,3 +51,7 @@ $ ffmpeg -i attractor%02d.png -vcodec libx264 -crf 17 -pix_fmt yuv420p out.mp4
 ```
 
 You need to change the `%02d` part to the length of the frame index part of the outputted file name.
+
+## License
+
+This library and binary artefacts are licensed under the [GNU LGPLv3](COPYING.LESSER).
