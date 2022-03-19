@@ -1,5 +1,6 @@
 use std::f64::consts::PI;
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::str::FromStr;
@@ -117,6 +118,16 @@ fn main() {
                 .help("Run on single thread"),
         )
         .arg(
+            Arg::new("jobs_per_thread")
+                .long("jobs-per-thread")
+                .short('j')
+                .conflicts_with("singlethread")
+                .help(jobs_per_thread_help)
+                .validator(parse_validate::<NonZeroUsize>)
+                .value_hint(ValueHint::Other)
+                .default_value("12"),
+        )
+        .arg(
             Arg::new("angle")
                 .long("angle")
                 .short('a')
@@ -221,7 +232,14 @@ fn main() {
         render(&config, &mut runtime, angle);
         colorize(&config, &runtime)
     } else {
-        render_parallel(config.clone(), angle * PI / 180., 12)
+        render_parallel(
+            config.clone(),
+            angle * PI / 180.,
+            matches
+                .value_of_t::<NonZeroUsize>("jobs_per_thread")
+                .expect("we have a default value and validated the input")
+                .get(),
+        )
     };
     let image = DynamicImage::ImageRgba16(image);
 
