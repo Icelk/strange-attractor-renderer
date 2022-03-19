@@ -12,12 +12,14 @@ use strange_attractor_renderer::{
     self, colorize, config::Config, config::RenderKind, render, Runtime,
 };
 
+/// validate that a argument passed by the user is valid, according to the parsing of type `T`.
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
 where
     <T as FromStr>::Err: ToString,
 {
     s.parse().map_err(|e: T::Err| e.to_string())
 }
+/// helper to write file using a generic encoder (e.g. PNG, BMP)
 fn write_image(encoder: impl image::ImageEncoder, image: DynamicImage) {
     encoder
         .write_image(
@@ -28,6 +30,7 @@ fn write_image(encoder: impl image::ImageEncoder, image: DynamicImage) {
         )
         .unwrap();
 }
+/// Open a writeable file at `path`. Panics at any errors.
 fn file(path: impl AsRef<Path>) -> impl Write {
     std::io::BufWriter::new(std::fs::File::create(path).unwrap())
 }
@@ -116,6 +119,7 @@ fn main() {
                 .default_value("0"),
         );
 
+    // shell completion things
     #[cfg(feature = "complete")]
     {
         command = clap_autocomplete::add_subcommand(command);
@@ -124,6 +128,7 @@ fn main() {
     let command_copy = command.clone();
     let matches = command.get_matches();
 
+    // shell completion things
     #[cfg(feature = "complete")]
     match clap_autocomplete::test_subcommand(&matches, command_copy) {
         Some(Ok(())) => {
@@ -136,6 +141,7 @@ fn main() {
         None => {}
     }
 
+    // get output file name
     let mut name = {
         let path = Path::new(
             matches
@@ -150,6 +156,7 @@ fn main() {
         name
     };
 
+    // construct config
     let mut config = Config {
         iterations: matches.value_of_t("iterations").unwrap(),
         width: matches.value_of_t("width").unwrap(),
@@ -163,6 +170,8 @@ fn main() {
     } else {
         RenderKind::Gas
     };
+
+    // check for restraints on formats
     if matches.is_present("pam") && !matches.is_present("8bit") {
         eprintln!("16-bit images not supported when using PAM format.");
         exit(1);
@@ -171,12 +180,15 @@ fn main() {
         eprintln!("16-bit images not supported when using BMP format.");
         exit(1);
     }
+
+    // get viewing angle
     let angle: f64 = matches
         .value_of_t("angle")
         .expect("we have a default value and validated the input");
     // Convert to radians
     let angle = angle * PI / 180.;
 
+    // render image
     let image = if matches.is_present("singlethread") {
         let mut runtime = Runtime::new(&config);
         render(&config, &mut runtime, angle);
@@ -186,6 +198,8 @@ fn main() {
     };
     let image = DynamicImage::ImageRgba16(image);
 
+    // convert image to format.
+    println!("Converting image format.");
     let image = match (config.transparent, matches.is_present("8bit")) {
         (true, false) => image,
         (false, false) => image.to_rgb16().into(),
@@ -194,7 +208,7 @@ fn main() {
     };
 
     println!("Rendering complete. Writing file.");
-
+    // writing file, depending on extension.
     if matches.is_present("pam") {
         name.set_extension("pam");
         let mut file = file(&name);
