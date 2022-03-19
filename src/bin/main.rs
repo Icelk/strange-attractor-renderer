@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::str::FromStr;
 
-use clap::{Arg, ArgGroup, Command, ValueHint};
+use clap::{Arg, ArgGroup, ArgMatches, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
-use image::DynamicImage;
+use image::{DynamicImage, ImageBuffer, Rgba};
 use strange_attractor_renderer::config::{BrighnessConstants, Colors};
-use strange_attractor_renderer::render_parallel;
 use strange_attractor_renderer::{
     self, colorize, config::Config, config::RenderKind, render, Runtime,
 };
+use strange_attractor_renderer::{render_parallel, ParallelRenderer};
 
 /// validate that a argument passed by the user is valid, according to the parsing of type `T`.
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
@@ -32,9 +32,126 @@ fn write_image(encoder: impl image::ImageEncoder, image: DynamicImage) {
         )
         .unwrap();
 }
+fn write_image_matches(
+    image: ImageBuffer<Rgba<u16>, Vec<u16>>,
+    matches: &ArgMatches,
+    mut name: PathBuf,
+    silent: bool,
+) {
+    let image = DynamicImage::ImageRgba16(image);
+
+    // convert image to format.
+    if !silent {
+        println!("Converting image format.");
+    }
+    let image = match (
+        matches.is_present("transparent"),
+        matches.is_present("8bit"),
+    ) {
+        (true, false) => image,
+        (false, false) => image.to_rgb16().into(),
+        (true, true) => image.to_rgba8().into(),
+        (false, true) => image.to_rgb8().into(),
+    };
+
+    if !silent {
+        println!("Rendering complete. Writing file.");
+    }
+    // writing file, depending on extension.
+    if matches.is_present("pam") {
+        name.set_extension("pam");
+        let mut file = file(&name);
+
+        let codec = pnm::PnmEncoder::new(&mut file).with_subtype(pnm::PnmSubtype::ArbitraryMap);
+        write_image(codec, image);
+    } else if matches.is_present("bmp") {
+        name.set_extension("bmp");
+        let mut file = file(&name);
+
+        let encoder = bmp::BmpEncoder::new(&mut file);
+        write_image(encoder, image);
+    } else {
+        name.set_extension("png");
+        let mut file = file(&name);
+
+        let codec = png::PngEncoder::new_with_quality(
+            &mut file,
+            png::CompressionType::Default,
+            png::FilterType::Adaptive,
+        );
+        write_image(codec, image);
+    }
+
+    println!("Wrote image to '{}'.", name.display());
+}
 /// Open a writeable file at `path`. Panics at any errors.
 fn file(path: impl AsRef<Path>) -> impl Write {
     std::io::BufWriter::new(std::fs::File::create(path).unwrap())
+}
+
+struct AngleIter {
+    end: f64,
+    curr: f64,
+    step: f64,
+    file: PathBuf,
+    iter: usize,
+    needed_digits: usize,
+}
+impl AngleIter {
+    fn new(start: f64, end: f64, step: f64, file: PathBuf) -> Self {
+        let count = (end - start - step / 2.) / step;
+        let needed_digits = if count as usize <= 1 {
+            0
+        } else {
+            count.log10().ceil() as usize
+        };
+
+        Self {
+            end,
+            curr: start,
+            step,
+            file,
+            iter: 0,
+            needed_digits,
+        }
+    }
+}
+impl Iterator for AngleIter {
+    type Item = (f64, PathBuf);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.curr - self.step / 2. < self.end {
+            let v = self.curr;
+            self.curr += self.step;
+
+            let mut file_name = self
+                .file
+                .file_stem()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("attractor")
+                .to_owned();
+            if self.needed_digits > 0 {
+                file_name.push_str(&format!(
+                    "{:0>digits$}",
+                    self.iter,
+                    digits = self.needed_digits,
+                ));
+            }
+            let mut file_name = PathBuf::from(file_name);
+            if let Some(ext) = self.file.extension() {
+                file_name.set_extension(ext);
+            }
+
+            let file = self.file.with_file_name(file_name);
+
+            self.iter += 1;
+            // Convert to radians
+            let v = v * PI / 180.;
+
+            Some((v, file))
+        } else {
+            None
+        }
+    }
 }
 
 fn main() {
@@ -60,7 +177,7 @@ fn main() {
             Arg::new("transparent")
                 .long("transparent")
                 .short('t')
-                .help("output transparency"),
+                .help("Add transparency to the image"),
         )
         .arg(
             Arg::new("iterations")
@@ -123,6 +240,12 @@ fn main() {
                 .help("Run on single thread"),
         )
         .arg(
+            Arg::new("silent")
+                .long("silent")
+                .short('q')
+                .help("Decrease verbosity"),
+        )
+        .arg(
             Arg::new("jobs_per_thread")
                 .long("jobs-per-thread")
                 .short('j')
@@ -151,6 +274,46 @@ fn main() {
                 .value_hint(ValueHint::Other)
                 .allow_hyphen_values(true)
                 .validator(parse_validate::<f64>),
+        )
+        .subcommand(
+            Command::new("sequence")
+                .about(
+                    "Render a sequence of frames rotating around the attractor.\n\
+            All the arguments passed before this subcommand is used when crating the images.",
+                )
+                .arg(
+                    Arg::new("start")
+                        .long("start")
+                        .short('s')
+                        .help("The angle to start the animation from (degrees)")
+                        .value_hint(ValueHint::Other)
+                        .default_value("0"),
+                )
+                .arg(
+                    Arg::new("end")
+                        .long("end")
+                        .short('e')
+                        .help("The angle to end the animation at (degrees)")
+                        .value_hint(ValueHint::Other)
+                        .validator(parse_validate::<f64>)
+                        .default_value("360"),
+                )
+                .arg(
+                    Arg::new("step")
+                        .long("step")
+                        .short('d')
+                        .help("Amount to change the angle for each frame (degrees)")
+                        .value_hint(ValueHint::Other)
+                        .validator::<_, _, String>(|v| {
+                            let v = parse_validate::<f64>(v)?;
+                            if v <= 0. {
+                                Err("step must be a positive".into())
+                            } else {
+                                Ok(())
+                            }
+                        })
+                        .default_value("0.5"),
+                ),
         );
 
     // shell completion things
@@ -158,6 +321,11 @@ fn main() {
     {
         command = clap_autocomplete::add_subcommand(command);
     }
+
+    let sequence_invalid = command.error(
+        clap::ErrorKind::InvalidValue,
+        "sequence end must be after start",
+    );
 
     let command_copy = command.clone();
     let matches = command.get_matches();
@@ -169,14 +337,14 @@ fn main() {
             exit(1);
         }
         Some(Err(err)) => {
-            eprintln!("Insufficient permissions: {err}");
+            eprintln!("Insufficient permissions, consider using --print flag: {err}");
             exit(1);
         }
         None => {}
     }
 
     // get output file name
-    let mut name = {
+    let name = {
         let path = Path::new(
             matches
                 .value_of("name")
@@ -189,6 +357,11 @@ fn main() {
         }
         name
     };
+
+    // get viewing angle
+    let angle: f64 = matches
+        .value_of_t("angle")
+        .expect("we have a default value and validated the input");
 
     // construct config
     let mut config = Config {
@@ -206,6 +379,10 @@ fn main() {
             },
             ..Default::default()
         },
+        angle,
+
+        silent: matches.is_present("silent"),
+
         ..Default::default()
     };
     config.render = if matches.is_present("depth") {
@@ -214,64 +391,58 @@ fn main() {
         RenderKind::Gas
     };
 
-    // get viewing angle
-    let angle: f64 = matches
-        .value_of_t("angle")
-        .expect("we have a default value and validated the input");
-    // Convert to radians
-    let angle = angle * PI / 180.;
+    let angle_iter = if let Some(matches) = matches.subcommand_matches("sequence") {
+        let start = matches
+            .value_of_t("start")
+            .expect("we have a default value and validated the input");
+        let end = matches
+            .value_of_t("end")
+            .expect("we have a default value and validated the input");
+        let step = matches
+            .value_of_t("step")
+            .expect("we have a default value and validated the input");
+        if end <= start {
+            sequence_invalid.exit();
+        }
+        AngleIter::new(start, end, step, name)
+    } else {
+        AngleIter::new(angle, angle, 1., name)
+    };
 
     // render image
-    let image = if matches.is_present("singlethread") {
+    if matches.is_present("singlethread") {
         let mut runtime = Runtime::new(&config);
-        render(&config, &mut runtime, angle);
-        colorize(&config, &runtime)
+        for (angle, name) in angle_iter {
+            config.angle = angle;
+
+            render(&config, &mut runtime);
+            let image = colorize(&config, &runtime);
+            write_image_matches(image, &matches, name, config.silent);
+        }
     } else {
-        render_parallel(
-            config.clone(),
-            angle * PI / 180.,
-            matches
-                .value_of_t::<NonZeroUsize>("jobs_per_thread")
-                .expect("we have a default value and validated the input")
-                .get(),
-        )
-    };
-    let image = DynamicImage::ImageRgba16(image);
+        let mut renderer = ParallelRenderer::new();
+        let mut encoders = Vec::new();
 
-    // convert image to format.
-    println!("Converting image format.");
-    let image = match (config.transparent, matches.is_present("8bit")) {
-        (true, false) => image,
-        (false, false) => image.to_rgb16().into(),
-        (true, true) => image.to_rgba8().into(),
-        (false, true) => image.to_rgb8().into(),
-    };
+        for (angle, name) in angle_iter {
+            config.angle = angle;
 
-    println!("Rendering complete. Writing file.");
-    // writing file, depending on extension.
-    if matches.is_present("pam") {
-        name.set_extension("pam");
-        let mut file = file(&name);
+            let image = render_parallel(
+                &mut renderer,
+                config.clone(),
+                matches
+                    .value_of_t::<NonZeroUsize>("jobs_per_thread")
+                    .expect("we have a default value and validated the input")
+                    .get(),
+            );
+            let matches = matches.clone();
+            let handle = std::thread::spawn(move || {
+                write_image_matches(image, &matches, name, config.silent);
+            });
+            encoders.push(handle);
+        }
 
-        let codec = pnm::PnmEncoder::new(&mut file).with_subtype(pnm::PnmSubtype::ArbitraryMap);
-        write_image(codec, image);
-    } else if matches.is_present("bmp") {
-        name.set_extension("bmp");
-        let mut file = file(&name);
-
-        let encoder = bmp::BmpEncoder::new(&mut file);
-        write_image(encoder, image);
-    } else {
-        name.set_extension("png");
-        let mut file = file(&name);
-
-        let codec = png::PngEncoder::new_with_quality(
-            &mut file,
-            png::CompressionType::Default,
-            png::FilterType::Adaptive,
-        );
-        write_image(codec, image);
+        encoders
+            .into_iter()
+            .for_each(|thread| thread.join().expect("encoder thread panicked"));
     }
-
-    println!("Wrote image to '{}'. Exiting.", name.display());
 }

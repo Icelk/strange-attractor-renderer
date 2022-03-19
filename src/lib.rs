@@ -37,7 +37,8 @@
 
 use std::mem;
 use std::sync::atomic::AtomicUsize;
-use std::sync::{atomic, Arc};
+use std::sync::{atomic, mpsc, Arc, Mutex};
+use std::thread::JoinHandle;
 
 use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba};
 use rand::{Rng, SeedableRng};
@@ -188,6 +189,9 @@ pub mod config {
 
         pub render: RenderKind,
         pub transparent: bool,
+        pub angle: f64,
+
+        pub silent: bool,
 
         pub coefficients: Coefficients,
         pub rotation: EulerAxisRotation,
@@ -202,6 +206,9 @@ pub mod config {
 
                 render: RenderKind::Gas,
                 transparent: true,
+                angle: 0.0,
+
+                silent: true,
 
                 coefficients: Coefficients::default(),
                 rotation: EulerAxisRotation {
@@ -447,17 +454,30 @@ pub struct Runtime {
     rng: rand::rngs::SmallRng,
 }
 impl Runtime {
-    pub fn new(config: &Config) -> Self {
-        let mut me = Self {
-            count: ImageBuffer::new(config.width, config.height),
-            steps: ImageBuffer::new(config.width, config.height),
-            zbuf: ImageBuffer::new(config.width, config.height),
+    fn empty() -> Self {
+        Self {
+            count: ImageBuffer::new(0, 0),
+            steps: ImageBuffer::new(0, 0),
+            zbuf: ImageBuffer::new(0, 0),
             max: 0,
 
             rng: rand::rngs::SmallRng::from_entropy(),
-        };
+        }
+    }
+    pub fn new(config: &Config) -> Self {
+        let mut me = Self::empty();
+        me.set_width_height(config.width, config.height);
         me.reset();
         me
+    }
+    fn set_width_height(&mut self, width: u32, height: u32) {
+        if self.count.width() != width || self.count.height() != height {
+            self.count = ImageBuffer::new(width, height);
+            self.steps = ImageBuffer::new(width, height);
+            self.zbuf = ImageBuffer::new(width, height);
+            self.max = 0;
+            self.reset();
+        }
     }
     fn image_identity<T: Pixel>() -> ImageBuffer<T, Vec<T::Subpixel>> {
         ImageBuffer::from_raw(0, 0, Vec::new()).unwrap()
@@ -488,7 +508,7 @@ impl Runtime {
     /// # Panics
     ///
     /// Panics if the dimensions of `self` isn't the same as the dimensions of `other`.
-    pub fn merge(mut self, other: &Self) -> Self {
+    pub fn merge(&mut self, other: &Self) {
         assert_eq!(self.steps.width(), other.steps.width());
         assert_eq!(self.steps.height(), other.steps.height());
 
@@ -518,7 +538,6 @@ impl Runtime {
                 }
             }
         }
-        self
     }
 }
 /// Render according to `config`, with angle `rotation` around the attractor.
@@ -527,15 +546,15 @@ impl Runtime {
 ///
 /// `rotation` is around [`Coefficients::center_camera`], in radians.
 #[allow(clippy::many_single_char_names)]
-pub fn render(config: &Config, runtime: &mut Runtime, rotation: f64) {
+pub fn render(config: &Config, runtime: &mut Runtime) {
     let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
     for _ in 0..1000 {
         initial_point = next_point(initial_point, &config.coefficients);
     }
 
     let rotation_matrix = config.rotation.to_rotation_matrix();
-    let sin_v = rotation.sin();
-    let cos_v = rotation.cos();
+    let sin_v = config.angle.sin();
+    let cos_v = config.angle.cos();
     let center_camera = config.coefficients.center_camera;
     #[allow(clippy::cast_lossless)]
     let width = config.width as f64;
@@ -608,8 +627,6 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     #[allow(clippy::cast_lossless)]
     let u16_max = u16::MAX as f64;
 
-    println!("Began colouring.");
-
     let depth_info = if matches!(config.render, RenderKind::Depth) {
         Some(
             #[allow(clippy::float_cmp)] // the -1.0 value is set by us
@@ -673,70 +690,151 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     image
 }
 
+#[must_use]
+pub struct ParallelRenderer {
+    threads: Vec<JoinHandle<()>>,
+    render_receiver: mpsc::Receiver<Arc<Mutex<Runtime>>>,
+    job_sender: watch::WatchSender<Option<(Config, Arc<AtomicUsize>)>>,
+}
+impl ParallelRenderer {
+    #[allow(clippy::missing_panics_doc)]
+    pub fn new() -> Self {
+        let num_threads = std::thread::available_parallelism()
+            .unwrap_or(std::num::NonZeroUsize::new(8).unwrap())
+            .get();
+
+        let mut threads = Vec::with_capacity(num_threads);
+
+        let (job_sender, mut job_receiver) = watch::channel(None);
+        // get the first, `None` value.
+        job_receiver.wait();
+        let (render_sender, render_receiver) = mpsc::channel();
+
+        for _ in 0..num_threads {
+            let receiver = job_receiver.clone();
+            let sender = render_sender.clone();
+            let handle = std::thread::spawn(move || {
+                let mut receiver = receiver;
+                let sender = sender;
+
+                let runtime = Arc::new(Mutex::new(Runtime::empty()));
+
+                loop {
+                    let (config, job_counter): (Config, Arc<AtomicUsize>) =
+                        if let Some(m) = receiver.wait() {
+                            m
+                        } else {
+                            return;
+                        };
+
+                    {
+                        let mut rt = runtime.lock().unwrap();
+                        rt.set_width_height(config.width, config.height);
+                        rt.reset();
+
+                        if !config.silent {
+                            println!("Rendering started on thread.");
+                        }
+                        loop {
+                            // apply the function to check if we should continue.
+                            // This also updates the atomic value.
+                            //
+                            // A `updated` valuable is needed to only decrement once.
+                            let mut updated = false;
+                            let more_to_do = job_counter
+                                .fetch_update(
+                                    atomic::Ordering::SeqCst,
+                                    atomic::Ordering::SeqCst,
+                                    |v| {
+                                        if v > 0 {
+                                            if updated {
+                                                Some(v)
+                                            } else {
+                                                if !config.silent {
+                                                    println!("Iteration complete, {v} left to go.");
+                                                }
+                                                updated = false;
+                                                Some(v - 1)
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    },
+                                )
+                                .is_ok();
+
+                            if !more_to_do {
+                                break;
+                            }
+                            render(&config, &mut rt);
+                        }
+                    }
+                    sender.send(Arc::clone(&runtime)).unwrap();
+                    if !config.silent {
+                        println!("Rendered finished.");
+                    }
+                }
+            });
+            threads.push(handle);
+        }
+        println!("Created parallel renderer.");
+        Self {
+            threads,
+            render_receiver,
+            job_sender,
+        }
+    }
+    fn send(&mut self, job: Config, job_counter: Arc<AtomicUsize>) {
+        self.job_sender.send(Some((job, job_counter)));
+    }
+    fn recv(&mut self) -> impl Iterator<Item = Arc<Mutex<Runtime>>> + '_ {
+        self.render_receiver.iter().take(self.num_threads())
+    }
+    fn num_threads(&self) -> usize {
+        self.threads.len()
+    }
+    pub fn shutdown(self) {
+        self.job_sender.send(None);
+        self.threads
+            .into_iter()
+            .for_each(|thread| thread.join().expect("render thread panicked"));
+    }
+}
+impl Default for ParallelRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 /// I recommend `16` for `jobs_per_thread`. If you get uneven images with low iteration counts, try
 /// `8`.
 ///
 /// At relatively low rations between iterations and pixels (<50), this isn't much faster.
 #[allow(clippy::missing_panics_doc)] // it won't panic
 #[must_use]
-pub fn render_parallel(mut config: Config, rotation: f64, jobs_per_thread: usize) -> FinalImage {
-    let num_threads = std::thread::available_parallelism()
-        .unwrap_or(std::num::NonZeroUsize::new(8).unwrap())
-        .get();
-
+pub fn render_parallel(
+    renderer: &mut ParallelRenderer,
+    mut config: Config,
+    jobs_per_thread: usize,
+) -> FinalImage {
     let iterations = config.iterations;
-    config.iterations = iterations / num_threads / jobs_per_thread;
-
-    let mut threads = Vec::with_capacity(num_threads);
+    config.iterations = iterations / renderer.num_threads() / jobs_per_thread;
 
     // We keep a job counter to balance threads. If one is way slower, it'll "take" less jobs,
     // which results in better runtime.
-    let job_counter = Arc::new(AtomicUsize::new(jobs_per_thread * num_threads));
-    for _ in 0..num_threads {
-        let config = config.clone();
-        let job_counter = Arc::clone(&job_counter);
-        let handle = std::thread::spawn(move || {
-            let mut runtime = Runtime::new(&config);
-            println!("Rendering started on thread.");
-            loop {
-                // apply the function to check if we should continue.
-                // This also updates the atomic value.
-                //
-                // A `updated` valuable is needed to only decrement once.
-                let mut updated = false;
-                let more_to_do = job_counter
-                    .fetch_update(atomic::Ordering::SeqCst, atomic::Ordering::SeqCst, |v| {
-                        if v > 0 {
-                            if updated {
-                                Some(v)
-                            } else {
-                                println!("Iteration complete, {v} left to go.");
-                                updated = false;
-                                Some(v - 1)
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .is_ok();
-                if !more_to_do {
-                    break;
-                }
-                render(&config, &mut runtime, rotation);
-            }
-            println!("Rendered finished.");
-            runtime
-        });
+    let job_counter = Arc::new(AtomicUsize::new(jobs_per_thread * renderer.num_threads()));
 
-        threads.push(handle);
-    }
+    renderer.send(config.clone(), job_counter);
 
-    let mut iter = threads.into_iter();
+    let mut iter = renderer.recv();
     // UNWRAP: `available_parallelism` is guaranteed to always return >0
-    let mut current = iter.next().unwrap().join().expect("thread panicked");
-    for thread in iter {
-        let runtime = thread.join().expect("thread panicked");
-        current = current.merge(&runtime);
+    let current = iter.next().unwrap();
+    for runtime in iter {
+        let mut a = current.lock().unwrap();
+        let b = runtime.lock().unwrap();
+        a.merge(&b);
     }
-    colorize(&config, &current)
+    {
+        let current = current.lock().unwrap();
+        colorize(&config, &current)
+    }
 }
