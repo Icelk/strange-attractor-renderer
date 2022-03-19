@@ -809,6 +809,19 @@ impl Default for ParallelRenderer {
 /// `8`.
 ///
 /// At relatively low rations between iterations and pixels (<50), this isn't much faster.
+///
+/// # How it works
+///
+/// Because strange attractors are inherently chaotic, we can render multiply images and then add
+/// them together.
+/// Internally, this uses three textures, `count` for the number of visits to the pixel, `steps`
+/// for the velocity at the closest visitation, and the `zbuf` which can give information about
+/// which pixel is the closest. The `zbuf` also gives us the depth texture.
+/// When combining the rendered image, we have to combine all of these.
+///
+/// When rendering through [`render`] without resetting the [`Runtime`], this is what naturally
+/// happens. When we use multiple threads however, we have to explicitly combine the runtimes
+/// consistently to what the [`render`] method implicitly does.
 #[allow(clippy::missing_panics_doc)] // it won't panic
 #[must_use]
 pub fn render_parallel(
