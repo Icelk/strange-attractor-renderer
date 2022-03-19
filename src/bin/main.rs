@@ -1,3 +1,4 @@
+use std::f64::consts::PI;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -103,7 +104,16 @@ fn main() {
             Arg::new("singlethread")
                 .long("single-thread")
                 .short('s')
-                .help("Run on single thread."),
+                .help("Run on single thread"),
+        )
+        .arg(
+            Arg::new("angle")
+                .long("angle")
+                .short('a')
+                .help("Angle to view attractor from (degrees)")
+                .value_hint(ValueHint::Other)
+                .validator(parse_validate::<f64>)
+                .default_value("0"),
         );
 
     #[cfg(feature = "complete")]
@@ -161,13 +171,18 @@ fn main() {
         eprintln!("16-bit images not supported when using BMP format.");
         exit(1);
     }
+    let angle: f64 = matches
+        .value_of_t("angle")
+        .expect("we have a default value and validated the input");
+    // Convert to radians
+    let angle = angle * PI / 180.;
 
     let image = if matches.is_present("singlethread") {
         let mut runtime = Runtime::new(&config);
-        render(&config, &mut runtime, 0.);
+        render(&config, &mut runtime, angle);
         colorize(&config, &runtime)
     } else {
-        render_parallel(config.clone(), 0., 12)
+        render_parallel(config.clone(), angle * PI / 180., 12)
     };
     let image = DynamicImage::ImageRgba16(image);
 
