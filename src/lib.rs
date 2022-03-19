@@ -541,7 +541,7 @@ impl Runtime {
     }
 }
 /// Render according to `config`, with angle `rotation` around the attractor.
-/// If the [`Runtime`] isn't [cleared](Runtime::clear), this just continues the "building" of the
+/// If the [`Runtime`] isn't [cleared](Runtime::reset), this just continues the "building" of the
 /// image. This can therefore be called in succession and the result is an ever-improving image.
 ///
 /// `rotation` is around [`Coefficients::center_camera`], in radians.
