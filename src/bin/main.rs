@@ -7,6 +7,7 @@ use std::str::FromStr;
 use clap::{Arg, ArgGroup, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::DynamicImage;
+use strange_attractor_renderer::config::{BrighnessConstants, Colors};
 use strange_attractor_renderer::render_parallel;
 use strange_attractor_renderer::{
     self, colorize, config::Config, config::RenderKind, render, Runtime,
@@ -36,6 +37,12 @@ fn file(path: impl AsRef<Path>) -> impl Write {
 }
 
 fn main() {
+    // split these up, which makes the formatting work on the long builder below.
+    // This is probably a rustfmt bug.
+    let jobs_per_thread_help = "Number of pieces to split the rendering up in per thread. This enables other faster threads to pick up the slack. Set to 1 to disable.";
+    let brighness_help =
+        "Offset the brightness. You generally want to decrease this if you have > 1e8 iterations.";
+
     let mut command = Command::new("strange-attractor-renderer")
         .arg(
             Arg::new("depth")
@@ -116,7 +123,18 @@ fn main() {
                 .help("Angle to view attractor from (degrees)")
                 .value_hint(ValueHint::Other)
                 .validator(parse_validate::<f64>)
+                .allow_hyphen_values(true)
                 .default_value("0"),
+        )
+        .arg(
+            Arg::new("brightness_offset")
+                .long("brightness-offset")
+                .short('b')
+                .help(brighness_help)
+                .default_value("-0.15")
+                .value_hint(ValueHint::Other)
+                .allow_hyphen_values(true)
+                .validator(parse_validate::<f64>),
         );
 
     // shell completion things
@@ -163,6 +181,15 @@ fn main() {
         height: matches.value_of_t("height").unwrap(),
 
         transparent: matches.is_present("transparent"),
+        colors: Colors {
+            brighness: BrighnessConstants {
+                offset: matches
+                    .value_of_t("brightness_offset")
+                    .expect("we have a default value and validated the input"),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         ..Default::default()
     };
     config.render = if matches.is_present("depth") {

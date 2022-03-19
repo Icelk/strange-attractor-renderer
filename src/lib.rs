@@ -287,6 +287,22 @@ pub mod config {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    pub struct BrighnessConstants {
+        /// adds this to the colour before multiplying [`Self::factor`].
+        /// Can be used to add contrast.
+        pub offset: f64,
+        pub factor: f64,
+    }
+    impl Default for BrighnessConstants {
+        fn default() -> Self {
+            Self {
+                offset: -0.15,
+                factor: 5. / 3.,
+            }
+        }
+    }
+
     /// Each of the slices should have their last and second to last be the same.
     #[derive(Debug, Clone)]
     pub struct Colors {
@@ -294,7 +310,7 @@ pub mod config {
         pub g: [f64; 7],
         pub b: [f64; 7],
 
-        pub brighness_function: fn(f64) -> f64,
+        pub brighness: BrighnessConstants,
     }
     impl Default for Colors {
         fn default() -> Self {
@@ -303,7 +319,7 @@ pub mod config {
                 g: [1., 1., 0.5, 1., 0.5, 0.5, 0.5],
                 b: [0.5, 0.5, 0.5, 1., 1., 1., 1.],
 
-                brighness_function: defaults::brightness_function,
+                brighness: BrighnessConstants::default(),
             }
         }
     }
@@ -347,11 +363,6 @@ pub mod config {
             // `TODO`: implement "brighten"
             let color = (part(screen_space, coeffs) + delta.magnitude()) / 2.;
             (color - 0.1) / 0.9
-        }
-        #[inline(always)]
-        #[must_use]
-        pub fn brightness_function(value: f64) -> f64 {
-            ((value - 0.15) * (5. / 3.)).clamp(0., 1.)
         }
     }
 }
@@ -402,7 +413,7 @@ pub fn color(value: f64, colors: &Colors) -> Rgb<f64> {
         r,
         g,
         b,
-        brighness_function: _,
+        brighness: _,
     } = colors;
     let value = value * 6.;
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -591,7 +602,7 @@ pub fn render(config: &Config, runtime: &mut Runtime, rotation: f64) {
 #[must_use]
 #[allow(clippy::missing_panics_doc)]
 pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
-    let brighness_function = config.colors.brighness_function;
+    let bk = config.colors.brighness;
     let mut image = ImageBuffer::new(config.width, config.height);
 
     #[allow(clippy::cast_lossless)]
@@ -632,9 +643,9 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
         let factor = ((count.0[0] + 1) as f64).log((runtime.max + 1) as f64);
         let pixel = match config.render {
             RenderKind::Gas => Rgba([
-                (brighness_function(r * factor) * u16_max) as _,
-                (brighness_function(g * factor) * u16_max) as _,
-                (brighness_function(b * factor) * u16_max) as _,
+                ((r * factor + bk.offset) * bk.factor * u16_max) as _,
+                ((g * factor + bk.offset) * bk.factor * u16_max) as _,
+                ((b * factor + bk.offset) * bk.factor * u16_max) as _,
                 if config.transparent {
                     (factor * u16_max) as u16
                 } else {
