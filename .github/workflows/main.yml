@@ -1,0 +1,62 @@
+name: CI
+
+on:
+    push:
+
+env:
+    CARGO_TERM_COLOR: always
+
+defaults:
+    run:
+        working-directory: chute
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checking out sources
+              uses: actions/checkout@v1
+            - name: Installing Rust toolchain
+              uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  override: true
+            - uses: Swatinem/rust-cache@v1
+            - name: Checking formatting
+              uses: actions-rs/cargo@v1
+              with:
+                  command: fmt
+                  args: -- --check
+            - name: Checking lints with all features
+              uses: actions-rs/cargo@v1
+              with:
+                  command: clippy
+                  args: --all-targets --all-features -- -D warnings
+            - name: Checking doc references
+              uses: Icelk/rustdoc-link-check@v1
+              with:
+                  private: true
+            - name: Testing project
+              uses: actions-rs/cargo@v1
+              with:
+                  command: test
+
+    build:
+        needs: [check]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checking out sources
+              uses: actions/checkout@v1
+            - name: Installing Rust toolchain
+              uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  profile: minimal
+            - uses: Swatinem/rust-cache@v1
+            - name: Compiling
+              run: cargo rustc --profile production
+            - name: Upload bin artefact
+              uses: actions/upload-artifact@v2
+              with:
+                  name: chute
+                  path: target/production/strange-attractor-renderer
