@@ -89,18 +89,23 @@ fn main() {
                 .validator(parse_validate::<u32>)
                 .default_value("1080"),
         )
-        .group(ArgGroup::new("format").arg("pam").arg("bmp"))
+        .group(
+            ArgGroup::new("format")
+                .arg("pam")
+                .arg("bmp")
+                .requires("8bit"),
+        )
         .arg(
             Arg::new("pam")
                 .long("pam")
-                .help("Use PAM format, a bitmap-like format")
+                .help("Use PAM format, a bitmap-like format. 16-bit images are not supported.")
                 .alias("pnm")
                 .alias("pbm"),
         )
         .arg(
             Arg::new("bmp")
                 .long("bmp")
-                .help("Use BMP format")
+                .help("Use BMP format. 16-bit images are not supported.")
                 .alias("bitmap"),
         )
         .arg(
@@ -209,16 +214,6 @@ fn main() {
         RenderKind::Gas
     };
 
-    // check for restraints on formats
-    if matches.is_present("pam") && !matches.is_present("8bit") {
-        eprintln!("16-bit images not supported when using PAM format.");
-        exit(1);
-    }
-    if matches.is_present("bmp") && !matches.is_present("8bit") {
-        eprintln!("16-bit images not supported when using BMP format.");
-        exit(1);
-    }
-
     // get viewing angle
     let angle: f64 = matches
         .value_of_t("angle")
@@ -277,4 +272,6 @@ fn main() {
         );
         write_image(codec, image);
     }
+
+    println!("Wrote image to '{}'. Exiting.", name.display());
 }
