@@ -6,10 +6,6 @@ on:
 env:
     CARGO_TERM_COLOR: always
 
-defaults:
-    run:
-        working-directory: chute
-
 jobs:
     check:
         runs-on: ubuntu-latest
@@ -54,9 +50,12 @@ jobs:
                   profile: minimal
             - uses: Swatinem/rust-cache@v1
             - name: Compiling
-              run: cargo rustc --profile production
+              uses: actions-rs/cargo@v1
+              with:
+                  command: rustc
+                  args: --profile production
             - name: Upload bin artefact
               uses: actions/upload-artifact@v2
               with:
-                  name: chute
+                  name: strange-attractor-renderer
                   path: target/production/strange-attractor-renderer
