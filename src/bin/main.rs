@@ -1,4 +1,3 @@
-use std::f64::consts::PI;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -8,7 +7,9 @@ use clap::{Arg, ArgGroup, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::DynamicImage;
 use strange_attractor_renderer::render_parallel;
-use strange_attractor_renderer::{self, config::Config, config::RenderKind};
+use strange_attractor_renderer::{
+    self, colorize, config::Config, config::RenderKind, render, Runtime,
+};
 
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
 where
@@ -97,6 +98,12 @@ fn main() {
                 .help("Write to file name")
                 .value_hint(ValueHint::FilePath)
                 .default_value("attractor"),
+        )
+        .arg(
+            Arg::new("singlethread")
+                .long("single-thread")
+                .short('s')
+                .help("Run on single thread."),
         );
 
     #[cfg(feature = "complete")]
@@ -155,12 +162,13 @@ fn main() {
         exit(1);
     }
 
-    // let image = {
-        // let mut rt = strange_attractor_renderer::Runtime::new(&config);
-        // strange_attractor_renderer::render(&config, &mut rt, 0.);
-        // strange_attractor_renderer::colorize(&config, &rt)
-    // };
-    let image = render_parallel(config.clone(), 45.*PI/180., 12);
+    let image = if matches.is_present("singlethread") {
+        let mut runtime = Runtime::new(&config);
+        render(&config, &mut runtime, 0.);
+        colorize(&config, &runtime)
+    } else {
+        render_parallel(config.clone(), 0., 12)
+    };
     let image = DynamicImage::ImageRgba16(image);
 
     let image = match (config.transparent, matches.is_present("8bit")) {
