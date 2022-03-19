@@ -42,13 +42,30 @@ use std::sync::{atomic, Arc};
 use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba};
 use rand::{Rng, SeedableRng};
 
-pub trait F64Ext {
+pub trait FloatExt {
     #[must_use]
     fn square(self) -> Self;
+    #[must_use]
+    fn lerp(self, other: Self, t: Self) -> Self;
 }
-impl F64Ext for f64 {
+impl FloatExt for f64 {
+    #[inline(always)]
     fn square(self) -> Self {
         self * self
+    }
+    #[inline(always)]
+    fn lerp(self, other: Self, t: Self) -> Self {
+        self * t + other * (1. - t)
+    }
+}
+impl FloatExt for f32 {
+    #[inline(always)]
+    fn square(self) -> Self {
+        self * self
+    }
+    #[inline(always)]
+    fn lerp(self, other: Self, t: Self) -> Self {
+        self * t + other * (1. - t)
     }
 }
 
@@ -57,7 +74,7 @@ use config::{CoefficientList, Coefficients, Colors, RenderKind};
 use primitives::{EulerAxisRotation, Vec3};
 
 pub mod primitives {
-    use super::{F64Ext, Rng};
+    use super::{FloatExt, Rng};
 
     use std::ops::{Add, Index, Mul, Sub};
     #[derive(Debug, PartialEq, Clone, Copy)]
@@ -394,6 +411,12 @@ pub fn color(value: f64, colors: &Colors) -> Rgb<f64> {
     let sub_n_offset_1 = 1.0 - sub_n_offset;
     Rgb([
         // lerp between colours
+        //
+        // the lerp is inlined to avoid multiple subtractions, about 3% performance increase
+        // (r[n + 1].lerp(r[n], sub_n_offset)).sqrt(),
+        // (g[n + 1].lerp(g[n], sub_n_offset)).sqrt(),
+        // (b[n + 1].lerp(b[n], sub_n_offset)).sqrt(),
+        //
         (r[n + 1] * sub_n_offset + r[n] * sub_n_offset_1).sqrt(),
         (g[n + 1] * sub_n_offset + g[n] * sub_n_offset_1).sqrt(),
         (b[n + 1] * sub_n_offset + b[n] * sub_n_offset_1).sqrt(),
