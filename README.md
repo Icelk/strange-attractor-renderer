@@ -25,13 +25,6 @@ All of these are optional.
 You need to have the latest version of stable [Rust](https://rust-lang.org/) installed on your system.
 Clone this repo. Run `cargo install --path . --profile production` to install the binary to your user's path.
 
-## Shell completion
-
-Using the subcommand `completion`, the binary automatically generates shell completions for your shell and tries to put them in the appropriate location.
-
-When using Bash or Zsh, you should run the binary as root, as we need root privileges to write to their completion directories.
-Alternatively, use the `--print` option to yourself write the completion file.
-
 ## Documentation
 
 Documentation of the main branch can be found at [doc.icelk.dev](https://doc.icelk.dev/strange-attractor-renderer/strange_attractor_renderer/).
@@ -56,6 +49,17 @@ $ ffmpeg -i attractor%02d.png -vcodec libx264 -crf 17 -pix_fmt yuv420p out.mp4
 ```
 
 You need to change the `%02d` part to the length of the frame index part of the outputted file name.
+
+## Acknowledgements
+
+Many thanks to Björn von Sydow for the inspiration, initial code design, and continuing feedback.
+
+## Shell completion
+
+Using the subcommand `completion`, the binary automatically generates shell completions for your shell and tries to put them in the appropriate location.
+
+When using Bash or Zsh, you should run the binary as root, as we need root privileges to write to their completion directories.
+Alternatively, use the `--print` option to yourself write the completion file.
 
 ## Images
 
