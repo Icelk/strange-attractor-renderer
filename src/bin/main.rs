@@ -436,6 +436,7 @@ fn main() {
             render(&config, &mut runtime);
             let image = colorize(&config, &runtime);
             write_image_matches(image, &matches, name, config.silent);
+            runtime.reset();
         }
     } else {
         let mut renderer = ParallelRenderer::new();
