@@ -20,6 +20,11 @@ All of these are optional.
 -   brightness control
 -   [shell completion](#shell-completion)
 
+## Installation
+
+You need to have the latest version of stable [Rust](https://rust-lang.org/) installed on your system.
+Clone this repo. Run `cargo install --path . --profile production` to install the binary to your user's path.
+
 ## Shell completion
 
 Using the subcommand `completion`, the binary automatically generates shell completions for your shell and tries to put them in the appropriate location.
@@ -51,6 +56,26 @@ $ ffmpeg -i attractor%02d.png -vcodec libx264 -crf 17 -pix_fmt yuv420p out.mp4
 ```
 
 You need to change the `%02d` part to the length of the frame index part of the outputted file name.
+
+## Images
+
+These are generated using the following commands:
+
+```shell
+# Build binary
+$ cargo build --release
+
+# poisson-saturne.png
+$ target/release/strange-attractor-renderer -i1000000000 -b -0.25
+# solar-sail.png
+$ target/release/strange-attractor-renderer -i1000000000 -h2000 -w1800 -b -0.1 -p solar-sail
+# solar-sail-220deg.png:
+$ target/release/strange-attractor-renderer -i1000000000 -h2000 -w1800 -p solar-sail -a 220
+```
+
+![Poisson saturne attractor](media/poisson-saturne.png)
+![Solar sail attractor](media/solar-sail.png)
+![Solar sail attractor from -140°](media/solar-sail-220deg.png)
 
 ## License
 
