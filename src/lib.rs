@@ -70,7 +70,7 @@ impl FloatExt for f32 {
     }
 }
 
-pub use config::{Config, CoefficientList, Coefficients, Colors, RenderKind};
+pub use config::{CoefficientList, Coefficients, Colors, Config, RenderKind};
 pub use primitives::{EulerAxisRotation, Vec3};
 
 pub mod primitives {
