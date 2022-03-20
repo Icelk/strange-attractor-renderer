@@ -120,7 +120,7 @@ impl AngleIter {
 impl Iterator for AngleIter {
     type Item = (f64, PathBuf);
     fn next(&mut self) -> Option<Self::Item> {
-        if self.curr - self.step / 2. < self.end {
+        if self.curr + self.step / 2. < self.end {
             let v = self.curr;
             self.curr += self.step;
 
@@ -131,6 +131,7 @@ impl Iterator for AngleIter {
                 .unwrap_or("attractor")
                 .to_owned();
             if self.needed_digits > 0 {
+                // left aligned `digits` number of zeroes
                 file_name.push_str(&format!(
                     "{:0>digits$}",
                     self.iter,
@@ -149,6 +150,9 @@ impl Iterator for AngleIter {
             let v = v * PI / 180.;
 
             Some((v, file))
+        } else if self.iter == 0 {
+            self.iter += 1;
+            Some((self.curr, self.file.clone()))
         } else {
             None
         }
