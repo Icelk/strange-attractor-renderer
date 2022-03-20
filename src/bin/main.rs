@@ -9,11 +9,10 @@ use clap::{Arg, ArgGroup, ArgMatches, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::{DynamicImage, ImageBuffer, Rgba};
 use strange_attractor_renderer::config::{
-    BrighnessConstants, CoefficientList, Coefficients, Colors, Config, RenderKind,
+    BrighnessConstants, Coefficients, Colors, Config, RenderKind,
 };
 use strange_attractor_renderer::{
-    self, colorize, primitives::EulerAxisRotation, primitives::Vec3, render, render_parallel,
-    ParallelRenderer, Runtime,
+    self, colorize, render, render_parallel, ParallelRenderer, Runtime,
 };
 
 /// validate that a argument passed by the user is valid, according to the parsing of type `T`.

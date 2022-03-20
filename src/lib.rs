@@ -7,7 +7,7 @@
 //! # use strange_attractor_renderer::*;
 //! let config = Config {
 //!     iterations: 100_000_000,
-//!     ..Default::default()
+//!     ..Config::new(Coefficients::poisson_saturne())
 //! };
 //! ```
 //!
@@ -70,9 +70,8 @@ impl FloatExt for f32 {
     }
 }
 
-pub use config::Config;
-use config::{CoefficientList, Coefficients, Colors, RenderKind};
-use primitives::{EulerAxisRotation, Vec3};
+pub use config::{Config, CoefficientList, Coefficients, Colors, RenderKind};
+pub use primitives::{EulerAxisRotation, Vec3};
 
 pub mod primitives {
     use super::{FloatExt, Rng};
