@@ -8,11 +8,13 @@ use std::str::FromStr;
 use clap::{Arg, ArgGroup, ArgMatches, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::{DynamicImage, ImageBuffer, Rgba};
-use strange_attractor_renderer::config::{BrighnessConstants, Colors};
-use strange_attractor_renderer::{
-    self, colorize, config::Config, config::RenderKind, render, Runtime,
+use strange_attractor_renderer::config::{
+    BrighnessConstants, CoefficientList, Coefficients, Colors, Config, RenderKind,
 };
-use strange_attractor_renderer::{render_parallel, ParallelRenderer};
+use strange_attractor_renderer::{
+    self, colorize, primitives::EulerAxisRotation, primitives::Vec3, render, render_parallel,
+    ParallelRenderer, Runtime,
+};
 
 /// validate that a argument passed by the user is valid, according to the parsing of type `T`.
 fn parse_validate<T: FromStr>(s: &str) -> Result<T, String>
@@ -206,6 +208,14 @@ fn main() {
                 .validator(parse_validate::<u32>)
                 .default_value("1080"),
         )
+        .arg(
+            Arg::new("preset")
+                .long("preset")
+                .short('p')
+                .help("Which built-in attractor to render")
+                .possible_values(["poisson-saturne", "solar-sail"])
+                .default_value("poisson-saturne"),
+        )
         .group(
             ArgGroup::new("format")
                 .arg("pam")
@@ -363,6 +373,15 @@ fn main() {
         .value_of_t("angle")
         .expect("we have a default value and validated the input");
 
+    // built-in attractor to use as the "base"
+    let inherit = match matches
+        .value_of("preset")
+        .expect("we have provided a default value")
+    {
+        "poisson-saturne" => Coefficients::poisson_saturne(),
+        "solar-sail" => Coefficients::solar_sail(),
+        _ => unreachable!("clap validation should not allow any other values. Please report bug."),
+    };
     // construct config
     let mut config = Config {
         iterations: matches.value_of_t("iterations").unwrap(),
@@ -383,7 +402,7 @@ fn main() {
 
         silent: matches.is_present("silent"),
 
-        ..Default::default()
+        ..Config::new(inherit)
     };
     config.render = if matches.is_present("depth") {
         RenderKind::Depth

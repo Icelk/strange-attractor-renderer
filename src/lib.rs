@@ -182,6 +182,7 @@ pub mod config {
     }
 
     #[derive(Debug, Clone)]
+    #[must_use]
     pub struct Config {
         pub iterations: usize,
         pub width: u32,
@@ -194,11 +195,10 @@ pub mod config {
         pub silent: bool,
 
         pub coefficients: Coefficients,
-        pub rotation: EulerAxisRotation,
         pub colors: Colors,
     }
-    impl Default for Config {
-        fn default() -> Self {
+    impl Config {
+        pub fn new(coefficients: Coefficients) -> Self {
             Self {
                 iterations: 10_000_000,
                 width: 1920,
@@ -210,25 +210,19 @@ pub mod config {
 
                 silent: true,
 
-                coefficients: Coefficients::default(),
-                rotation: EulerAxisRotation {
-                    axis: Vec3 {
-                        x: 0.304_289_493_528_802,
-                        y: 0.760_492_682_863_655,
-                        z: 0.573_636_455_813_981,
-                    },
-                    rotation: 1.782_681_918_874_46,
-                },
+                coefficients,
                 colors: Colors::default(),
             }
         }
     }
 
     #[derive(Debug, Clone)]
+    #[must_use]
     pub struct CoefficientList {
         pub list: [f64; 10],
     }
     #[derive(Clone)]
+    #[must_use]
     pub struct Coefficients {
         pub x: CoefficientList,
         pub y: CoefficientList,
@@ -238,6 +232,8 @@ pub mod config {
         ///
         /// Is highly related to which coefficients are chosen
         pub center_camera: Vec3,
+        pub rotation: EulerAxisRotation,
+        pub scale: f64,
 
         /// Takes delta, screen space, and settings.
         pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
@@ -253,8 +249,8 @@ pub mod config {
                 .finish()
         }
     }
-    impl Default for Coefficients {
-        fn default() -> Self {
+    impl Coefficients {
+        pub fn poisson_saturne() -> Self {
             Self {
                 x: CoefficientList {
                     list: [
@@ -289,7 +285,46 @@ pub mod config {
                     /* mid point between z[min,max]. constant 0.12 works well, don't know why we need that */
                     -0.366 + 0.12,
                 ),
-                transform_colors: defaults::color_transform,
+                rotation: EulerAxisRotation {
+                    axis: Vec3 {
+                        x: 0.304_289_493_528_802,
+                        y: 0.760_492_682_863_655,
+                        z: 0.573_636_455_813_981,
+                    },
+                    rotation: 1.782_681_918_874_46,
+                },
+                scale: 1.,
+                transform_colors: transforms::poisson_saturne,
+            }
+        }
+        pub fn solar_sail() -> Self {
+            Self {
+                x: CoefficientList {
+                    list: [
+                        0.744_304, -0.546_835, 0.121_519, -0.653_165, 0.399, 0.379, 0.44, 1.014,
+                        -0.805_063, 0.377,
+                    ],
+                },
+                y: CoefficientList {
+                    list: [
+                        -0.683, 0.531_646, -0.04557, -1.2, -0.546_835, 0.091_139, 0.744_304,
+                        -0.273_418, -0.349_367, -0.531_646,
+                    ],
+                },
+                z: CoefficientList {
+                    list: [
+                        0.712, 0.744_304, -0.577_215, 0.966, 0.04557, 1.063_291, 0.01519,
+                        -0.425_316, 0.212_658, -0.01519,
+                    ],
+                },
+                center_camera: Vec3::new(0.28, -0.12, 0.22),
+                rotation: EulerAxisRotation {
+                    axis: Vec3::new(0.02466, 0.4618, -0.54789),
+                    rotation: 2.2195,
+                },
+                scale: 1.7,
+
+                transform_colors: transforms::solar_sail,
             }
         }
     }
@@ -331,13 +366,19 @@ pub mod config {
         }
     }
 
-    pub mod defaults {
+    pub mod transforms {
         use super::{Coefficients, Vec3};
         use std::f64::consts::PI;
 
         #[must_use]
         #[inline(always)]
-        pub fn color_transform(delta: Vec3, screen_space: Vec3, coeffs: &Coefficients) -> f64 {
+        pub fn solar_sail(delta: Vec3, _screen_space: Vec3, _coeffs: &Coefficients) -> f64 {
+            let color = delta.magnitude();
+            (color - 0.2) * 0.8
+        }
+        #[must_use]
+        #[inline(always)]
+        pub fn poisson_saturne(delta: Vec3, screen_space: Vec3, coeffs: &Coefficients) -> f64 {
             #[inline(always)]
             fn part(p: Vec3, coeffs: &Coefficients) -> f64 {
                 #[allow(unused)] // clarity
@@ -367,7 +408,6 @@ pub mod config {
                     1.
                 }
             }
-            // `TODO`: implement "brighten"
             let color = (part(screen_space, coeffs) + delta.magnitude()) / 2.;
             (color - 0.1) / 0.9
         }
@@ -552,7 +592,7 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
         initial_point = next_point(initial_point, &config.coefficients);
     }
 
-    let rotation_matrix = config.rotation.to_rotation_matrix();
+    let rotation_matrix = config.coefficients.rotation.to_rotation_matrix();
     let sin_v = config.angle.sin();
     let cos_v = config.angle.cos();
     let center_camera = config.coefficients.center_camera;
@@ -560,6 +600,8 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
     let width = config.width as f64;
     #[allow(clippy::cast_lossless)]
     let height = config.height as f64;
+    let width_scaled = width * config.coefficients.scale;
+    let scale_adjusted_mid = 0.5 / config.coefficients.scale;
 
     let mut previous_point = initial_point;
     let mut current_point = initial_point;
@@ -575,8 +617,9 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
         let z2 =
             (screen_space.x + center_camera.x) * sin_v - (screen_space.z + center_camera.y) * cos_v;
 
-        let i = (0.5 - x2) * width;
-        let j = height / 2. - (screen_space.y + center_camera.z) * width;
+        // (0.5 - x2 * scale) * width;
+        let i = (scale_adjusted_mid - x2) * width_scaled;
+        let j = height / 2. - (screen_space.y + center_camera.z) * width_scaled;
 
         if i >= width || j >= height || i < 0. || j < 0. {
             continue;
