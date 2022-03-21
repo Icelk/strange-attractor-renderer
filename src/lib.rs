@@ -1,3 +1,6 @@
+//! Master branch online documentation is available at
+//! [doc.icelk.dev](https://doc.icelk.dev/strange-attractor-renderer/strange_attractor_renderer/).
+//!
 //! # Pipeline
 //!
 //! First you need to get a [`Config`].
@@ -30,19 +33,37 @@
 //! The thing slowing the algorithm down with larger image dimensions
 //! is the cache size - and memory access. We basically do random access reads and writes on a
 //! often > 2 megapixel image. If the system memory is slow, this brings performance to a halt.
+//!
+//! # Colouring
+//!
+//! When the iterations are executed, the magnitude of change is stored in a texture. When it's
+//! time for colouring, this |Δp| is mapped to a palette. The brightness is determined by the number
+//! of visits to the pixel.
+// there are many #[allow()] in the code. These disregard the lint warnings I've enabled below.
 
+// some online documentation wizardry
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
+// deny all lints for the whole project, even the pedantic ones... :(
 #![deny(clippy::all, clippy::pedantic)]
+// allow the inline_always lint for the whole project, as they are heavily used to increase
+// performance.
 #![allow(clippy::inline_always)]
 
+// import standard library items
 use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{atomic, mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 
+// import items from external libraries
+// image handles image formats and provide the main image type we use
 use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba};
+// used to get random initial points.
 use rand::{Rng, SeedableRng};
 
+/// Trait to use the following functions on the float primitives.
+///
+/// Here for convenience.
 pub trait FloatExt {
     #[must_use]
     fn square(self) -> Self;
@@ -73,6 +94,7 @@ impl FloatExt for f32 {
 pub use config::{CoefficientList, Coefficients, Colors, Config, RenderKind};
 pub use primitives::{EulerAxisRotation, Vec3};
 
+/// Mathematical primitives
 pub mod primitives {
     use super::{FloatExt, Rng};
 
@@ -95,32 +117,45 @@ pub mod primitives {
         pub fn magnitude(self) -> f64 {
             (self.x.square() + self.y.square() + self.z.square()).sqrt()
         }
+        #[must_use]
+        #[inline(always)]
+        pub fn normalize(self) -> Self {
+            self * (1. / self.magnitude())
+        }
     }
+    // implement operations for Vec3
     impl Sub for Vec3 {
         type Output = Self;
+        #[inline(always)]
         fn sub(self, rhs: Self) -> Self::Output {
             Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
         }
     }
     impl Add for Vec3 {
         type Output = Self;
+        #[inline(always)]
         fn add(self, rhs: Self) -> Self::Output {
             Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
         }
     }
     impl Mul<f64> for Vec3 {
         type Output = Self;
+        #[inline(always)]
         fn mul(self, v: f64) -> Self::Output {
             Self::new(self.x * v, self.y * v, self.z * v)
         }
     }
+    /// enables using `rng.gen` to get a Vec3, with x,y,z between 0 and 1
     impl rand::distributions::Distribution<Vec3> for rand::distributions::Standard {
         fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Vec3 {
             Vec3::new(rng.gen(), rng.gen(), rng.gen())
         }
     }
+
+    /// See [Wikipedia](https://en.wikipedia.org/wiki/Euler's_rotation_theorem) for more info.
     #[derive(Debug, PartialEq, Clone, Copy)]
     pub struct EulerAxisRotation {
+        /// The Euler axis
         pub axis: Vec3,
         /// Rotation around [`Self::axis`], in radians.
         pub rotation: f64,
@@ -130,6 +165,9 @@ pub mod primitives {
         #[inline(always)]
         pub fn to_rotation_matrix(self) -> Matrix3x3 {
             let Self { axis, rotation } = self;
+            // normalize Vec, only on non-release/production builds, as this lowers performance
+            #[cfg(debug_assertions)]
+            let axis = axis.normalize();
             let Vec3 { x, y, z } = axis;
             let c = rotation.cos();
             let c1 = 1. - c;
@@ -144,8 +182,11 @@ pub mod primitives {
         }
     }
 
+    /// A 3x3 matrix. Use `matrix[(0,2)]` to get the third item in the first column - indices are
+    /// zero-based.
     #[derive(Debug, PartialEq, Clone)]
     pub struct Matrix3x3 {
+        /// Each column contains a row with three [`f64`]s.
         pub columns: [[f64; 3]; 3],
     }
     impl Matrix3x3 {
@@ -169,28 +210,39 @@ pub mod primitives {
     }
 }
 
+/// Configuration for rendering - how to get the next iteration, colouring, camera position,
+/// brightness, etc.
 pub mod config {
     use std::fmt::{self, Debug};
 
     use super::{EulerAxisRotation, Vec3};
 
+    /// How to render the internal data.
     #[derive(Debug, Clone)]
     pub enum RenderKind {
+        /// The default, creates a good-looking gas-like image.
         Gas,
+        /// Renders the depth map.
         Depth,
     }
 
     #[derive(Debug, Clone)]
     #[must_use]
     pub struct Config {
+        /// Heavily affects performance
         pub iterations: usize,
+        /// Image width, slight performance decrease
         pub width: u32,
+        /// Image height, slight performance decrease
         pub height: u32,
 
         pub render: RenderKind,
+        /// This reduces colour quality.
         pub transparent: bool,
+        /// The camera rotation angle.
         pub angle: f64,
 
+        /// Be less verbose.
         pub silent: bool,
 
         pub coefficients: Coefficients,
@@ -215,14 +267,19 @@ pub mod config {
         }
     }
 
+    /// See [`Coefficients`].
     #[derive(Debug, Clone)]
     #[must_use]
     pub struct CoefficientList {
         pub list: [f64; 10],
     }
+    /// Coefficients for a polynomial Sprott type attractor.
+    /// See this page from [chaoscope](http://www.chaoscope.org/doc/attractors.htm) for more
+    /// context.
     #[derive(Clone)]
     #[must_use]
     pub struct Coefficients {
+        // coefficient lists
         pub x: CoefficientList,
         pub y: CoefficientList,
         pub z: CoefficientList,
@@ -232,6 +289,7 @@ pub mod config {
         /// Is highly related to which coefficients are chosen
         pub center_camera: Vec3,
         pub rotation: EulerAxisRotation,
+        /// General viewing scale. Increase this to zoom in more.
         pub scale: f64,
 
         /// Takes delta, screen space, and settings.
@@ -332,6 +390,7 @@ pub mod config {
     pub struct BrighnessConstants {
         /// adds this to the colour before multiplying [`Self::factor`].
         /// Can be used to add contrast.
+        /// This is usually what you want.
         pub offset: f64,
         pub factor: f64,
     }
@@ -346,6 +405,7 @@ pub mod config {
 
     /// Each of the slices should have their last and second to last be the same.
     #[derive(Debug, Clone)]
+    // `TODO`: abstract this as a palette
     pub struct Colors {
         pub r: [f64; 7],
         pub g: [f64; 7],
@@ -365,6 +425,7 @@ pub mod config {
         }
     }
 
+    /// Transformations for getting the "delta"
     pub mod transforms {
         use super::{Coefficients, Vec3};
         use std::f64::consts::PI;
@@ -397,6 +458,8 @@ pub mod config {
 
                 let x2 =
                     (p.x + coeffs.center_camera.x) * COS + (p.z + coeffs.center_camera.y) * SIN;
+                // This computes which "part" of the poisson saturne attractor the current point is
+                // in (in screen space) by comparing the points to limiting "planes"
                 if x2 < -0.0839
                     || 10.55 * x2 + p.y < 0.46 - 1.0941
                     || 1.0426 * x2 + p.y < 0.179 - 0.1576
@@ -413,6 +476,7 @@ pub mod config {
     }
 }
 
+/// Convenience alias for an 16-bit RGBA image.
 pub type FinalImage = ImageBuffer<Rgba<u16>, Vec<u16>>;
 
 /// This is part of the general algorithm. We get the new coordinates by multiplying previous
@@ -424,6 +488,7 @@ pub fn next_point(p: Vec3, coefficients: &Coefficients) -> Vec3 {
     fn sum_coefficients(polynomials: &[f64; 10], coefficients: &CoefficientList) -> f64 {
         let mut sum = 0.;
         for i in 0..10 {
+            // unsafe to circumvent bounds checks, increasing speed
             unsafe {
                 let v1 = polynomials.get_unchecked(i);
                 let v2 = coefficients.list.get_unchecked(i);
@@ -432,7 +497,8 @@ pub fn next_point(p: Vec3, coefficients: &Coefficients) -> Vec3 {
         }
         sum
     }
-    let polynomials = [
+    // monomial (polynomials with only one term)
+    let monoms = [
         1.,
         p.x,
         p.x.square(),
@@ -446,9 +512,9 @@ pub fn next_point(p: Vec3, coefficients: &Coefficients) -> Vec3 {
     ];
 
     Vec3 {
-        x: sum_coefficients(&polynomials, &coefficients.x),
-        y: sum_coefficients(&polynomials, &coefficients.y),
-        z: sum_coefficients(&polynomials, &coefficients.z),
+        x: sum_coefficients(&monoms, &coefficients.x),
+        y: sum_coefficients(&monoms, &coefficients.y),
+        z: sum_coefficients(&monoms, &coefficients.z),
     }
 }
 /// `value` is position in color wheel, in the range [0..1)
