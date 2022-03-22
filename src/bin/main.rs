@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::str::FromStr;
 
+// import all the libraries
 use clap::{Arg, ArgGroup, ArgMatches, Command, ValueHint};
 use image::codecs::{bmp, png, pnm};
 use image::{DynamicImage, ImageBuffer, Rgba};
+// import our library (src/lib.rs)
 use strange_attractor_renderer::config::{
     BrighnessConstants, Coefficients, Colors, Config, RenderKind,
 };
@@ -33,6 +35,8 @@ fn write_image(encoder: impl image::ImageEncoder, image: DynamicImage) {
         )
         .unwrap();
 }
+/// Write image from user input.
+/// Split out from main to allow both single-threaded and multithreaded
 fn write_image_matches(
     image: ImageBuffer<Rgba<u16>, Vec<u16>>,
     matches: &ArgMatches,
@@ -90,6 +94,7 @@ fn file(path: impl AsRef<Path>) -> impl Write {
     std::io::BufWriter::new(std::fs::File::create(path).unwrap())
 }
 
+/// Iterate over sequence angles
 struct AngleIter {
     end: f64,
     curr: f64,
@@ -100,6 +105,7 @@ struct AngleIter {
 }
 impl AngleIter {
     fn new(start: f64, end: f64, step: f64, file: PathBuf) -> Self {
+        // estimate iterations, to get the needed digits to represent the sequence.
         let count = (end - start - step / 2.) / step;
         let needed_digits = if count as usize <= 1 {
             0
@@ -124,6 +130,7 @@ impl Iterator for AngleIter {
             let v = self.curr;
             self.curr += self.step;
 
+            // construct the new file name
             let mut file_name = self
                 .file
                 .file_stem()
@@ -340,7 +347,10 @@ fn main() {
         "sequence end must be after start",
     );
 
+    // shell completion things
+    #[cfg(feature = "complete")]
     let command_copy = command.clone();
+
     let matches = command.get_matches();
 
     // shell completion things
@@ -371,11 +381,6 @@ fn main() {
         name
     };
 
-    // get viewing angle
-    let angle: f64 = matches
-        .value_of_t("angle")
-        .expect("we have a default value and validated the input");
-
     // built-in attractor to use as the "base"
     let inherit = match matches
         .value_of("preset")
@@ -401,7 +406,6 @@ fn main() {
             },
             ..Default::default()
         },
-        angle,
 
         silent: matches.is_present("silent"),
 
@@ -428,6 +432,10 @@ fn main() {
         }
         AngleIter::new(start, end, step, name)
     } else {
+        // get viewing angle
+        let angle: f64 = matches
+            .value_of_t("angle")
+            .expect("we have a default value and validated the input");
         AngleIter::new(angle, angle, 1., name)
     };
 
@@ -467,5 +475,6 @@ fn main() {
         encoders
             .into_iter()
             .for_each(|thread| thread.join().expect("encoder thread panicked"));
+        renderer.shutdown();
     }
 }

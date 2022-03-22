@@ -492,10 +492,12 @@ pub type FinalImage = ImageBuffer<Rgba<u16>, Vec<u16>>;
 #[must_use]
 pub fn next_point(p: Vec3, coefficients: &Coefficients) -> Vec3 {
     #[inline(always)]
+    // polynomials is a reference to an array with 10 f64s.
     fn sum_coefficients(polynomials: &[f64; 10], coefficients: &CoefficientList) -> f64 {
         let mut sum = 0.;
         for i in 0..10 {
             // unsafe to circumvent bounds checks, increasing speed
+            // SAFETY: we know 0..10 is in bounds of the array of length 10 (i.e. [f64; 10])
             unsafe {
                 let v1 = polynomials.get_unchecked(i);
                 let v2 = coefficients.list.get_unchecked(i);
@@ -558,14 +560,23 @@ pub fn color(value: f64, colors: &Colors) -> Rgb<f64> {
 /// This enables us to reuse memory.
 #[must_use]
 pub struct Runtime {
+    // counts the number of visits to each pixel
     count: ImageBuffer<Luma<u32>, Vec<u32>>,
+    // counts the result of [`config::transforms`]
     steps: ImageBuffer<Luma<f64>, Vec<f64>>,
+    // stores the depth of each pixel (in screen space)
+    // the range pixel values aren't defined, iterate the whole list to get the minimum and
+    // maximum.
     zbuf: ImageBuffer<Luma<f32>, Vec<f32>>,
+    // the max number of steps
+    // used to scale all other pixels in [`Self::steps`], without having to iterate the whole
+    // texture first.
     max: u32,
 
     rng: rand::rngs::SmallRng,
 }
 impl Runtime {
+    /// You have to [`Self::set_width_height`] before using this.
     fn empty() -> Self {
         Self {
             count: ImageBuffer::new(0, 0),
@@ -576,12 +587,14 @@ impl Runtime {
             rng: rand::rngs::SmallRng::from_entropy(),
         }
     }
+    /// Creates a new runtime from the dimensions of [`Config`].
     pub fn new(config: &Config) -> Self {
         let mut me = Self::empty();
         me.set_width_height(config.width, config.height);
         me.reset();
         me
     }
+    /// Makes new textures if the width and height don't match the inner textures.
     fn set_width_height(&mut self, width: u32, height: u32) {
         if self.count.width() != width || self.count.height() != height {
             self.count = ImageBuffer::new(width, height);
@@ -591,6 +604,7 @@ impl Runtime {
             self.reset();
         }
     }
+    /// Returns an empty image of any pixel type.
     fn image_identity<T: Pixel>() -> ImageBuffer<T, Vec<T::Subpixel>> {
         ImageBuffer::from_raw(0, 0, Vec::new()).unwrap()
     }
@@ -616,6 +630,8 @@ impl Runtime {
     }
 
     /// Merges the data of the two images. `other` will not be modified.
+    /// This makes `self` appear as if it had been rendered with the
+    /// sum of the iterations of `self` and `other`.
     ///
     /// # Panics
     ///
@@ -653,6 +669,7 @@ impl Runtime {
     }
 }
 /// Render according to `config`, with angle `rotation` around the attractor.
+///
 /// If the [`Runtime`] isn't [cleared](Runtime::reset), this just continues the "building" of the
 /// image. This can therefore be called in succession and the result is an ever-improving image.
 ///
@@ -660,10 +677,12 @@ impl Runtime {
 #[allow(clippy::many_single_char_names)]
 pub fn render(config: &Config, runtime: &mut Runtime) {
     let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
+    // skip first 1000 to get good values in the attractor
     for _ in 0..1000 {
         initial_point = next_point(initial_point, &config.coefficients);
     }
 
+    // computations used later - we do as much work up front as possible
     let rotation_matrix = config.coefficients.rotation.to_rotation_matrix();
     let sin_v = config.angle.sin();
     let cos_v = config.angle.cos();
@@ -681,6 +700,7 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
     for _ in 0..(config.iterations) {
         current_point = next_point(current_point, &config.coefficients);
 
+        // rotation_matrix * current_point
         let screen_space = rotation_matrix.mul_right(current_point);
 
         // rotate around center_camera
@@ -689,14 +709,20 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
         let z2 =
             (screen_space.x + center_camera.x) * sin_v - (screen_space.z + center_camera.y) * cos_v;
 
-        // (0.5 - x2 * scale) * width;
+        // (0.5 - x2 * scale) * width, but optimized to use constants, so we don't have the
+        // multiplication
         let i = (scale_adjusted_mid - x2) * width_scaled;
+        // instead of 0.5width as above, we have 0.5height as the center point. The scaling of the
+        // position relative to that is still width, as we want to keep the shape
         let j = height / 2. - (screen_space.y + center_camera.z) * width_scaled;
 
+        // do bounds checks
         if i >= width || j >= height || i < 0. || j < 0. {
             continue;
         }
 
+        // convert floats to image coordinates
+        // this is safe, as we checked the bounds above.
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let i = i as u32;
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -718,9 +744,12 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
 
         let zbuf_pix = unsafe { runtime.zbuf.unsafe_get_pixel(i, j) };
         #[allow(clippy::cast_possible_truncation)]
+        // if new depth is greater than previous, change that pixel
         if z2 as f32 > zbuf_pix.0[0] {
             let delta = current_point - previous_point;
 
+            // get the colour transformation output, later used in colouring as the index to the
+            // palette
             let value =
                 (config.coefficients.transform_colors)(delta, screen_space, &config.coefficients);
             unsafe {
@@ -742,6 +771,7 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     #[allow(clippy::cast_lossless)]
     let u16_max = u16::MAX as f64;
 
+    // if rendering depth, find min and max depth
     let depth_info = if matches!(config.render, RenderKind::Depth) {
         Some(
             #[allow(clippy::float_cmp)] // the -1.0 value is set by us
@@ -750,12 +780,13 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
                 .pixels()
                 .map(|pixel| pixel.0[0])
                 .filter(|p| *p != -1.0)
-                // have to use .fold instead of .max as `f32` doesn't implement Ord.
                 .fold((0.0f32, f32::MAX), |(a1, a2), p| (a1.max(p), a2.min(p))),
         )
     } else {
+        // Else, don't set the value. This is equivalent to null in other languages.
         None
     };
+    // take the tuple of (max, min) and return (max, min, diff), if `depth_info` is Some
     let depth_info = depth_info.map(|(a, b)| (a, b, (a - b)));
 
     // ignore lints
@@ -792,6 +823,7 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
                     0.0
                 } else {
                     let (_, min, diff) = depth_info.unwrap();
+                    // reverse lerp
                     (z - min) / diff
                 };
                 let z = (z * u16::MAX as f32) as u16;
@@ -805,6 +837,7 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
     image
 }
 
+/// Handle to threads and channels to render a config on multiple threads.
 #[must_use]
 pub struct ParallelRenderer {
     threads: Vec<JoinHandle<()>>,
@@ -812,6 +845,7 @@ pub struct ParallelRenderer {
     job_sender: watch::WatchSender<Option<(Config, Arc<AtomicUsize>)>>,
 }
 impl ParallelRenderer {
+    /// Initiate an appropriate amount of threads and set them up to accept jobs.
     #[allow(clippy::missing_panics_doc)]
     pub fn new() -> Self {
         let num_threads = std::thread::available_parallelism()
@@ -899,15 +933,20 @@ impl ParallelRenderer {
             job_sender,
         }
     }
+    /// Send the `job` to all threads.
     fn send(&mut self, job: Config, job_counter: Arc<AtomicUsize>) {
         self.job_sender.send(Some((job, job_counter)));
     }
+    /// Blocks on receiving access to the thread's runtimes.
+    /// Access them though the [`Mutex`].
     fn recv(&mut self) -> impl Iterator<Item = Arc<Mutex<Runtime>>> + '_ {
         self.render_receiver.iter().take(self.num_threads())
     }
+    /// Number of initiated threads, usually used to construct the `job_counter` at [`Self::send`].
     fn num_threads(&self) -> usize {
         self.threads.len()
     }
+    /// Wait for all threads to finish.
     pub fn shutdown(self) {
         self.job_sender.send(None);
         self.threads
@@ -945,22 +984,27 @@ pub fn render_parallel(
     jobs_per_thread: usize,
 ) -> FinalImage {
     let iterations = config.iterations;
+    // split up in num_threads and jobs_per_thread
     config.iterations = iterations / renderer.num_threads() / jobs_per_thread;
 
     // We keep a job counter to balance threads. If one is way slower, it'll "take" less jobs,
     // which results in better runtime.
     let job_counter = Arc::new(AtomicUsize::new(jobs_per_thread * renderer.num_threads()));
 
+    // send the job
     renderer.send(config.clone(), job_counter);
 
+    // wait for the job
     let mut iter = renderer.recv();
     // UNWRAP: `available_parallelism` is guaranteed to always return >0
     let current = iter.next().unwrap();
+    // merge all images
     for runtime in iter {
         let mut a = current.lock().unwrap();
         let b = runtime.lock().unwrap();
         a.merge(&b);
     }
+
     {
         let current = current.lock().unwrap();
         colorize(&config, &current)
