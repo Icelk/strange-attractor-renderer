@@ -425,7 +425,10 @@ pub mod config {
         }
     }
 
-    /// Transformations for getting the "delta"
+    /// Transformations for getting the position on the palette used in colouring.
+    /// Returned values should range between [0..1).
+    /// All functions used as [colour transforms](Coefficients::transform_colors) must take three
+    /// arguments - the Δp, the position in screen space, and the [`Coefficients`].
     pub mod transforms {
         use super::{Coefficients, Vec3};
         use std::f64::consts::PI;
@@ -470,6 +473,10 @@ pub mod config {
                     1.
                 }
             }
+            // Using the part here means we shift half the palette (it's divided by two).
+            // To not make the returned value return more than 1, we adjust the |Δp| (magnitude of
+            // point delta). First by dividing by 2, then by subtracting the whole (with the part
+            // data) by 0.1, then dividing by 0.9.
             let color = (part(screen_space, coeffs) + delta.magnitude()) / 2.;
             (color - 0.1) / 0.9
         }
