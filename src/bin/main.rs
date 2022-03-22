@@ -7,7 +7,9 @@ use std::str::FromStr;
 
 // import all the libraries
 use clap::{Arg, ArgGroup, ArgMatches, Command, ValueHint};
-use image::codecs::{bmp, png, pnm};
+#[cfg(feature = "png")]
+use image::codecs::png;
+use image::codecs::{bmp, pnm};
 use image::{DynamicImage, ImageBuffer, Rgba};
 // import our library (src/lib.rs)
 use strange_attractor_renderer::config::{
@@ -62,30 +64,42 @@ fn write_image_matches(
     if !silent {
         println!("Rendering complete. Writing file.");
     }
-    // writing file, depending on extension.
-    if matches.is_present("pam") {
-        name.set_extension("pam");
-        let mut file = file(&name);
+    let f = || {
+        // writing file, depending on extension.
+        if matches.is_present("pam") {
+            name.set_extension("pam");
+            let mut file = file(&name);
 
-        let codec = pnm::PnmEncoder::new(&mut file).with_subtype(pnm::PnmSubtype::ArbitraryMap);
-        write_image(codec, image);
-    } else if matches.is_present("bmp") {
-        name.set_extension("bmp");
-        let mut file = file(&name);
+            let codec = pnm::PnmEncoder::new(&mut file).with_subtype(pnm::PnmSubtype::ArbitraryMap);
+            write_image(codec, image);
+            return;
+        } else if matches.is_present("bmp") {
+            name.set_extension("bmp");
+            let mut file = file(&name);
 
-        let encoder = bmp::BmpEncoder::new(&mut file);
-        write_image(encoder, image);
-    } else {
-        name.set_extension("png");
-        let mut file = file(&name);
+            let encoder = bmp::BmpEncoder::new(&mut file);
+            write_image(encoder, image);
+            return;
+        }
+        #[cfg(feature = "png")]
+        {
+            name.set_extension("png");
+            let mut file = file(&name);
 
-        let codec = png::PngEncoder::new_with_quality(
-            &mut file,
-            png::CompressionType::Default,
-            png::FilterType::Adaptive,
-        );
-        write_image(codec, image);
-    }
+            let codec = png::PngEncoder::new_with_quality(
+                &mut file,
+                png::CompressionType::Default,
+                png::FilterType::Adaptive,
+            );
+            write_image(codec, image);
+        }
+        #[cfg(not(feature = "png"))]
+        {
+            eprintln!("Please specify an image format.");
+            exit(1);
+        }
+    };
+    f();
 
     println!("Wrote image to '{}'.", name.display());
 }
