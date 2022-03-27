@@ -10,7 +10,7 @@
 //! # use strange_attractor_renderer::*;
 //! let config = Config {
 //!     iterations: 100_000_000,
-//!     ..Config::new(Coefficients::poisson_saturne())
+//!     ..Config::poisson_saturne()
 //! };
 //! ```
 //!
