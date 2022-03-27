@@ -49,6 +49,7 @@
 // performance.
 #![allow(clippy::inline_always)]
 
+use std::fmt::Debug;
 // import standard library items
 use std::mem;
 use std::sync::atomic::AtomicUsize;
@@ -61,44 +62,53 @@ use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba}
 // used to get random initial points.
 use rand::{Rng, SeedableRng};
 
-/// Trait to use the following functions on the float primitives.
-///
-/// Here for convenience.
-pub trait FloatExt {
-    #[must_use]
-    fn square(self) -> Self;
-    #[must_use]
-    fn lerp(self, other: Self, t: Self) -> Self;
-}
-impl FloatExt for f64 {
-    #[inline(always)]
-    fn square(self) -> Self {
-        self * self
-    }
-    #[inline(always)]
-    fn lerp(self, other: Self, t: Self) -> Self {
-        self * t + other * (1. - t)
-    }
-}
-impl FloatExt for f32 {
-    #[inline(always)]
-    fn square(self) -> Self {
-        self * self
-    }
-    #[inline(always)]
-    fn lerp(self, other: Self, t: Self) -> Self {
-        self * t + other * (1. - t)
-    }
-}
+pub use config::{Colors, Config, RenderKind};
+pub use primitives::{EulerAxisRotation, FloatExt, Vec3};
 
-pub use config::{CoefficientList, Coefficients, Colors, Config, RenderKind};
-pub use primitives::{EulerAxisRotation, Vec3};
+/// A strange attractor.
+pub trait Attractor: Debug + Clone {
+    /// Get the next point of the attractor.
+    ///
+    /// Please make this `#[inline(always)]`!
+    #[must_use]
+    fn next_point(&self, previous: Vec3) -> Vec3;
+}
 
 /// Mathematical primitives
 pub mod primitives {
-    use super::{FloatExt, Rng};
-
+    use super::Rng;
     use std::ops::{Add, Index, Mul, Sub};
+
+    /// Trait to use the following functions on the float primitives.
+    ///
+    /// Here for convenience.
+    pub trait FloatExt {
+        #[must_use]
+        fn square(self) -> Self;
+        #[must_use]
+        fn lerp(self, other: Self, t: Self) -> Self;
+    }
+    impl FloatExt for f64 {
+        #[inline(always)]
+        fn square(self) -> Self {
+            self * self
+        }
+        #[inline(always)]
+        fn lerp(self, other: Self, t: Self) -> Self {
+            self * t + other * (1. - t)
+        }
+    }
+    impl FloatExt for f32 {
+        #[inline(always)]
+        fn square(self) -> Self {
+            self * self
+        }
+        #[inline(always)]
+        fn lerp(self, other: Self, t: Self) -> Self {
+            self * t + other * (1. - t)
+        }
+    }
+
     #[derive(Debug, PartialEq, Clone, Copy)]
     pub struct Vec3 {
         pub x: f64,
@@ -213,9 +223,8 @@ pub mod primitives {
 /// Configuration for rendering - how to get the next iteration, colouring, camera position,
 /// brightness, etc.
 pub mod config {
+    use super::{attractors, Attractor, EulerAxisRotation, Vec3};
     use std::fmt::{self, Debug};
-
-    use super::{EulerAxisRotation, Vec3};
 
     /// How to render the internal data.
     #[derive(Debug, Clone)]
@@ -226,9 +235,35 @@ pub mod config {
         Depth,
     }
 
-    #[derive(Debug, Clone)]
+    /// Other data which is dependant on the [`Attractor`].
+    #[derive(Clone)]
+    pub struct View {
+        /// The position to center the camera on
+        ///
+        /// Is highly related to which coefficients are chosen
+        pub center_camera: Vec3,
+        pub rotation: EulerAxisRotation,
+        /// General viewing scale. Increase this to zoom in more.
+        pub scale: f64,
+
+        /// Takes delta, screen space, and settings.
+        pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
+    }
+
+    impl Debug for View {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("View")
+                .field("center_camera", &self.center_camera)
+                .field("rotation", &self.rotation)
+                .field("scale", &self.scale)
+                .field("transform_colors", &"fn")
+                .finish()
+        }
+    }
+
+    #[derive(Clone, Debug)]
     #[must_use]
-    pub struct Config {
+    pub struct Config<A: Attractor> {
         /// Heavily affects performance
         pub iterations: usize,
         /// Image width, slight performance decrease
@@ -245,11 +280,13 @@ pub mod config {
         /// Be less verbose.
         pub silent: bool,
 
-        pub coefficients: Coefficients,
+        pub attractor: A,
         pub colors: Colors,
+
+        pub view: View,
     }
-    impl Config {
-        pub fn new(coefficients: Coefficients) -> Self {
+    impl<A: Attractor> Config<A> {
+        pub fn new(coefficients: A, view: View) -> Self {
             Self {
                 iterations: 10_000_000,
                 width: 1920,
@@ -261,72 +298,30 @@ pub mod config {
 
                 silent: true,
 
-                coefficients,
+                attractor: coefficients,
                 colors: Colors::default(),
+
+                view,
             }
         }
     }
-
-    /// See [`Coefficients`].
-    #[derive(Debug, Clone)]
-    #[must_use]
-    pub struct CoefficientList {
-        pub list: [f64; 10],
-    }
-    /// Coefficients for a polynomial Sprott type attractor.
-    /// See this page from [chaoscope](http://www.chaoscope.org/doc/attractors.htm) for more
-    /// context.
-    #[derive(Clone)]
-    #[must_use]
-    pub struct Coefficients {
-        // coefficient lists
-        pub x: CoefficientList,
-        pub y: CoefficientList,
-        pub z: CoefficientList,
-
-        /// The position to center the camera on
-        ///
-        /// Is highly related to which coefficients are chosen
-        pub center_camera: Vec3,
-        pub rotation: EulerAxisRotation,
-        /// General viewing scale. Increase this to zoom in more.
-        pub scale: f64,
-
-        /// Takes delta, screen space, and settings.
-        pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
-    }
-    impl Debug for Coefficients {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("Coeffients")
-                .field("x", &self.x)
-                .field("y", &self.y)
-                .field("z", &self.z)
-                .field("center_camera", &self.center_camera)
-                .field("transform_colors", &"fn")
-                .finish()
-        }
-    }
-    impl Coefficients {
+    impl Config<attractors::PolynomialSprott2Degree> {
         pub fn poisson_saturne() -> Self {
-            Self {
-                x: CoefficientList {
-                    list: [
-                        0.021, 1.182, -1.183, 0.128, -1.12, -0.641, -1.152, -0.834, -0.97, 0.722,
-                    ],
-                },
-                y: CoefficientList {
-                    list: [
-                        0.243_038, -0.825, -1.2, -0.835_443, -0.835_443, -0.364_557, 0.458,
-                        0.622_785, -0.394_937, -1.032_911,
-                    ],
-                },
-                z: CoefficientList {
-                    list: [
-                        -0.455_696, 0.673, 0.915, -0.258_228, -0.495, -0.264, -0.432, -0.416,
-                        -0.877, -0.3,
-                    ],
-                },
+            let coeffs = attractors::PolynomialSprott2Degree {
+                x: [
+                    0.021, 1.182, -1.183, 0.128, -1.12, -0.641, -1.152, -0.834, -0.97, 0.722,
+                ],
+                y: [
+                    0.243_038, -0.825, -1.2, -0.835_443, -0.835_443, -0.364_557, 0.458, 0.622_785,
+                    -0.394_937, -1.032_911,
+                ],
+                z: [
+                    -0.455_696, 0.673, 0.915, -0.258_228, -0.495, -0.264, -0.432, -0.416, -0.877,
+                    -0.3,
+                ],
+            };
 
+            let view = View {
                 /*
                     `TODO`: Add option to make first-pass to get these values, to then compute `center_camera`
 
@@ -352,28 +347,25 @@ pub mod config {
                 },
                 scale: 1.,
                 transform_colors: transforms::poisson_saturne,
-            }
+            };
+            Self::new(coeffs, view)
         }
         pub fn solar_sail() -> Self {
-            Self {
-                x: CoefficientList {
-                    list: [
-                        0.744_304, -0.546_835, 0.121_519, -0.653_165, 0.399, 0.379, 0.44, 1.014,
-                        -0.805_063, 0.377,
-                    ],
-                },
-                y: CoefficientList {
-                    list: [
-                        -0.683, 0.531_646, -0.04557, -1.2, -0.546_835, 0.091_139, 0.744_304,
-                        -0.273_418, -0.349_367, -0.531_646,
-                    ],
-                },
-                z: CoefficientList {
-                    list: [
-                        0.712, 0.744_304, -0.577_215, 0.966, 0.04557, 1.063_291, 0.01519,
-                        -0.425_316, 0.212_658, -0.01519,
-                    ],
-                },
+            let coeffs = attractors::PolynomialSprott2Degree {
+                x: [
+                    0.744_304, -0.546_835, 0.121_519, -0.653_165, 0.399, 0.379, 0.44, 1.014,
+                    -0.805_063, 0.377,
+                ],
+                y: [
+                    -0.683, 0.531_646, -0.04557, -1.2, -0.546_835, 0.091_139, 0.744_304,
+                    -0.273_418, -0.349_367, -0.531_646,
+                ],
+                z: [
+                    0.712, 0.744_304, -0.577_215, 0.966, 0.04557, 1.063_291, 0.01519, -0.425_316,
+                    0.212_658, -0.01519,
+                ],
+            };
+            let view = View {
                 center_camera: Vec3::new(0.28, -0.12, 0.22),
                 rotation: EulerAxisRotation {
                     axis: Vec3::new(0.02466, 0.4618, -0.54789),
@@ -381,8 +373,9 @@ pub mod config {
                 },
                 scale: 1.7,
 
-                transform_colors: transforms::solar_sail,
-            }
+                transform_colors: transforms::adjusted_velocity,
+            };
+            Self::new(coeffs, view)
         }
     }
 
@@ -430,20 +423,20 @@ pub mod config {
     /// All functions used as [colour transforms](Coefficients::transform_colors) must take three
     /// arguments - the Δp, the position in screen space, and the [`Coefficients`].
     pub mod transforms {
-        use super::{Coefficients, Vec3};
+        use super::{Vec3, View};
         use std::f64::consts::PI;
 
         #[must_use]
         #[inline(always)]
-        pub fn solar_sail(delta: Vec3, _screen_space: Vec3, _coeffs: &Coefficients) -> f64 {
+        pub fn adjusted_velocity(delta: Vec3, _screen_space: Vec3, _coeffs: &View) -> f64 {
             let color = delta.magnitude();
             (color - 0.2) * 0.8
         }
         #[must_use]
         #[inline(always)]
-        pub fn poisson_saturne(delta: Vec3, screen_space: Vec3, coeffs: &Coefficients) -> f64 {
+        pub fn poisson_saturne(delta: Vec3, screen_space: Vec3, coeffs: &View) -> f64 {
             #[inline(always)]
-            fn part(p: Vec3, coeffs: &Coefficients) -> f64 {
+            fn part(p: Vec3, coeffs: &View) -> f64 {
                 #[allow(unused)] // clarity
                 const RADIAN_45_5: f64 = 91. * PI / 360.;
                 /// [`RADIAN_45_5`].cos()
@@ -483,49 +476,66 @@ pub mod config {
     }
 }
 
+pub mod attractors {
+    use super::{Attractor, FloatExt, Vec3};
+
+    /// Coefficients for a polynomial Sprott type attractor, of the second degree.
+    /// See this page from [chaoscope](http://www.chaoscope.org/doc/attractors.htm) for more
+    /// context.
+    #[derive(Debug, Clone)]
+    #[must_use]
+    pub struct PolynomialSprott2Degree {
+        // coefficient lists
+        pub x: [f64; 10],
+        pub y: [f64; 10],
+        pub z: [f64; 10],
+    }
+    /// This is part of the polynomial Sprott algorithm. We get the new coordinates by multiplying previous
+    /// (using polynomials) with a set of coefficients.
+    impl Attractor for PolynomialSprott2Degree {
+        #[inline(always)]
+        fn next_point(&self, p: crate::Vec3) -> crate::Vec3 {
+            #[inline(always)]
+            // polynomials is a reference to an array with 10 f64s.
+            fn sum_coefficients(polynomials: &[f64; 10], coefficients: &[f64; 10]) -> f64 {
+                let mut sum = 0.;
+                for i in 0..10 {
+                    // unsafe to circumvent bounds checks, increasing speed
+                    // SAFETY: we know 0..10 is in bounds of the array of length 10 (i.e. [f64; 10])
+                    unsafe {
+                        let v1 = polynomials.get_unchecked(i);
+                        let v2 = coefficients.get_unchecked(i);
+                        sum += v1 * v2;
+                    }
+                }
+                sum
+            }
+            // monomial (polynomials with only one term)
+            let monoms = [
+                1.,
+                p.x,
+                p.x.square(),
+                p.x * p.y,
+                p.x * p.z,
+                p.y,
+                p.y.square(),
+                p.y * p.z,
+                p.z,
+                p.z.square(),
+            ];
+
+            Vec3 {
+                x: sum_coefficients(&monoms, &self.x),
+                y: sum_coefficients(&monoms, &self.y),
+                z: sum_coefficients(&monoms, &self.z),
+            }
+        }
+    }
+}
+
 /// Convenience alias for an 16-bit RGBA image.
 pub type FinalImage = ImageBuffer<Rgba<u16>, Vec<u16>>;
 
-/// This is part of the general algorithm. We get the new coordinates by multiplying previous
-/// (using polynomials) with a set of coefficients.
-#[inline(always)]
-#[must_use]
-pub fn next_point(p: Vec3, coefficients: &Coefficients) -> Vec3 {
-    #[inline(always)]
-    // polynomials is a reference to an array with 10 f64s.
-    fn sum_coefficients(polynomials: &[f64; 10], coefficients: &CoefficientList) -> f64 {
-        let mut sum = 0.;
-        for i in 0..10 {
-            // unsafe to circumvent bounds checks, increasing speed
-            // SAFETY: we know 0..10 is in bounds of the array of length 10 (i.e. [f64; 10])
-            unsafe {
-                let v1 = polynomials.get_unchecked(i);
-                let v2 = coefficients.list.get_unchecked(i);
-                sum += v1 * v2;
-            }
-        }
-        sum
-    }
-    // monomial (polynomials with only one term)
-    let monoms = [
-        1.,
-        p.x,
-        p.x.square(),
-        p.x * p.y,
-        p.x * p.z,
-        p.y,
-        p.y.square(),
-        p.y * p.z,
-        p.z,
-        p.z.square(),
-    ];
-
-    Vec3 {
-        x: sum_coefficients(&monoms, &coefficients.x),
-        y: sum_coefficients(&monoms, &coefficients.y),
-        z: sum_coefficients(&monoms, &coefficients.z),
-    }
-}
 /// `value` is position in color wheel, in the range [0..1)
 #[must_use]
 #[inline(always)]
@@ -588,7 +598,7 @@ impl Runtime {
         }
     }
     /// Creates a new runtime from the dimensions of [`Config`].
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config<impl Attractor>) -> Self {
         let mut me = Self::empty();
         me.set_width_height(config.width, config.height);
         me.reset();
@@ -675,30 +685,30 @@ impl Runtime {
 ///
 /// `rotation` is around [`Coefficients::center_camera`], in radians.
 #[allow(clippy::many_single_char_names)]
-pub fn render(config: &Config, runtime: &mut Runtime) {
+pub fn render(config: &Config<impl Attractor>, runtime: &mut Runtime) {
     let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
     // skip first 1000 to get good values in the attractor
     for _ in 0..1000 {
-        initial_point = next_point(initial_point, &config.coefficients);
+        initial_point = config.attractor.next_point(initial_point);
     }
 
     // computations used later - we do as much work up front as possible
-    let rotation_matrix = config.coefficients.rotation.to_rotation_matrix();
+    let rotation_matrix = config.view.rotation.to_rotation_matrix();
     let sin_v = config.angle.sin();
     let cos_v = config.angle.cos();
-    let center_camera = config.coefficients.center_camera;
+    let center_camera = config.view.center_camera;
     #[allow(clippy::cast_lossless)]
     let width = config.width as f64;
     #[allow(clippy::cast_lossless)]
     let height = config.height as f64;
-    let width_scaled = width * config.coefficients.scale;
-    let scale_adjusted_mid = 0.5 / config.coefficients.scale;
+    let width_scaled = width * config.view.scale;
+    let scale_adjusted_mid = 0.5 / config.view.scale;
 
     let mut previous_point = initial_point;
     let mut current_point = initial_point;
 
     for _ in 0..(config.iterations) {
-        current_point = next_point(current_point, &config.coefficients);
+        current_point = config.attractor.next_point(current_point);
 
         // rotation_matrix * current_point
         let screen_space = rotation_matrix.mul_right(current_point);
@@ -750,8 +760,7 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
 
             // get the colour transformation output, later used in colouring as the index to the
             // palette
-            let value =
-                (config.coefficients.transform_colors)(delta, screen_space, &config.coefficients);
+            let value = (config.view.transform_colors)(delta, screen_space, &config.view);
             unsafe {
                 runtime.steps.unsafe_put_pixel(i, j, Luma([value]));
 
@@ -764,7 +773,7 @@ pub fn render(config: &Config, runtime: &mut Runtime) {
 }
 #[must_use]
 #[allow(clippy::missing_panics_doc)]
-pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
+pub fn colorize(config: &Config<impl Attractor>, runtime: &Runtime) -> FinalImage {
     let bk = config.colors.brighness;
     let mut image = ImageBuffer::new(config.width, config.height);
 
@@ -839,12 +848,14 @@ pub fn colorize(config: &Config, runtime: &Runtime) -> FinalImage {
 
 /// Handle to threads and channels to render a config on multiple threads.
 #[must_use]
-pub struct ParallelRenderer {
+pub struct ParallelRenderer<A: Attractor> {
     threads: Vec<JoinHandle<()>>,
     render_receiver: mpsc::Receiver<Arc<Mutex<Runtime>>>,
-    job_sender: watch::WatchSender<Option<(Config, Arc<AtomicUsize>)>>,
+    // `TODO`: make the config we send dynamic and downcast, so we don't have to have this
+    // generic.
+    job_sender: watch::WatchSender<Option<(Config<A>, Arc<AtomicUsize>)>>,
 }
-impl ParallelRenderer {
+impl<A: Attractor + Send + Sync + 'static> ParallelRenderer<A> {
     /// Initiate an appropriate amount of threads and set them up to accept jobs.
     #[allow(clippy::missing_panics_doc)]
     pub fn new() -> Self {
@@ -869,7 +880,7 @@ impl ParallelRenderer {
                 let runtime = Arc::new(Mutex::new(Runtime::empty()));
 
                 loop {
-                    let (config, job_counter): (Config, Arc<AtomicUsize>) =
+                    let (config, job_counter): (Config<_>, Arc<AtomicUsize>) =
                         if let Some(m) = receiver.wait() {
                             m
                         } else {
@@ -934,7 +945,7 @@ impl ParallelRenderer {
         }
     }
     /// Send the `job` to all threads.
-    fn send(&mut self, job: Config, job_counter: Arc<AtomicUsize>) {
+    fn send(&mut self, job: Config<A>, job_counter: Arc<AtomicUsize>) {
         self.job_sender.send(Some((job, job_counter)));
     }
     /// Blocks on receiving access to the thread's runtimes.
@@ -954,7 +965,7 @@ impl ParallelRenderer {
             .for_each(|thread| thread.join().expect("render thread panicked"));
     }
 }
-impl Default for ParallelRenderer {
+impl<A: Attractor + Send + Sync + 'static> Default for ParallelRenderer<A> {
     fn default() -> Self {
         Self::new()
     }
@@ -978,9 +989,9 @@ impl Default for ParallelRenderer {
 /// consistently to what the [`render`] method implicitly does.
 #[allow(clippy::missing_panics_doc)] // it won't panic
 #[must_use]
-pub fn render_parallel(
-    renderer: &mut ParallelRenderer,
-    mut config: Config,
+pub fn render_parallel<A: Attractor + Send + Sync + 'static>(
+    renderer: &mut ParallelRenderer<A>,
+    mut config: Config<A>,
     jobs_per_thread: usize,
 ) -> FinalImage {
     let iterations = config.iterations;

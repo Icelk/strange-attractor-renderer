@@ -12,9 +12,7 @@ use image::codecs::png;
 use image::codecs::{bmp, pnm};
 use image::{DynamicImage, ImageBuffer, Rgba};
 // import our library (src/lib.rs)
-use strange_attractor_renderer::config::{
-    BrighnessConstants, Coefficients, Colors, Config, RenderKind,
-};
+use strange_attractor_renderer::config::{BrighnessConstants, Colors, Config, RenderKind};
 use strange_attractor_renderer::{
     self, colorize, render, render_parallel, ParallelRenderer, Runtime,
 };
@@ -400,8 +398,8 @@ fn main() {
         .value_of("preset")
         .expect("we have provided a default value")
     {
-        "poisson-saturne" => Coefficients::poisson_saturne(),
-        "solar-sail" => Coefficients::solar_sail(),
+        "poisson-saturne" => Config::poisson_saturne(),
+        "solar-sail" => Config::solar_sail(),
         _ => unreachable!("clap validation should not allow any other values. Please report bug."),
     };
     // construct config
@@ -423,7 +421,7 @@ fn main() {
 
         silent: matches.is_present("silent"),
 
-        ..Config::new(inherit)
+        ..inherit
     };
     config.render = if matches.is_present("depth") {
         RenderKind::Depth
