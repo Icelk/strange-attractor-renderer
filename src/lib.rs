@@ -62,10 +62,12 @@ use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba}
 // used to get random initial points.
 use rand::{Rng, SeedableRng};
 
-pub use config::{Colors, Config, RenderKind};
+pub use config::{Colors, Config, RenderKind, View};
 pub use primitives::{EulerAxisRotation, FloatExt, Vec3};
 
 /// A strange attractor.
+///
+/// This is made generic to allow for speedy execution of all kinds of attractors.
 pub trait Attractor: Debug + Clone {
     /// Get the next point of the attractor.
     ///
@@ -420,8 +422,8 @@ pub mod config {
 
     /// Transformations for getting the position on the palette used in colouring.
     /// Returned values should range between [0..1).
-    /// All functions used as [colour transforms](Coefficients::transform_colors) must take three
-    /// arguments - the Δp, the position in screen space, and the [`Coefficients`].
+    /// All functions used as [colour transforms](View::transform_colors) must take three
+    /// arguments - the Δp, the position in screen space, and the [`View`].
     pub mod transforms {
         use super::{Vec3, View};
         use std::f64::consts::PI;
@@ -476,6 +478,11 @@ pub mod config {
     }
 }
 
+/// The included attractors.
+///
+/// > You can always implement [`Attractor`] yourself!
+///
+/// These are majorly inspired from [chaoscope](http://chaoscope.org/manual.htm)'s manual.
 pub mod attractors {
     use super::{Attractor, FloatExt, Vec3};
 
@@ -683,7 +690,7 @@ impl Runtime {
 /// If the [`Runtime`] isn't [cleared](Runtime::reset), this just continues the "building" of the
 /// image. This can therefore be called in succession and the result is an ever-improving image.
 ///
-/// `rotation` is around [`Coefficients::center_camera`], in radians.
+/// `rotation` is around [`View::center_camera`], in radians.
 #[allow(clippy::many_single_char_names)]
 pub fn render(config: &Config<impl Attractor>, runtime: &mut Runtime) {
     let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
