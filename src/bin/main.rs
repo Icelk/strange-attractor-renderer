@@ -14,7 +14,7 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 // import our library (src/lib.rs)
 use strange_attractor_renderer::config::{BrighnessConstants, Colors, Config, RenderKind};
 use strange_attractor_renderer::{
-    self, colorize, render, render_parallel, ParallelRenderer, Runtime,
+    self, colorize, render, render_parallel, Attractor, ParallelRenderer, Runtime,
 };
 
 /// validate that a argument passed by the user is valid, according to the parsing of type `T`.
@@ -378,30 +378,22 @@ fn main() {
         None => {}
     }
 
-    // get output file name
-    let name = {
-        let path = Path::new(
-            matches
-                .value_of("name")
-                .expect("We provided a default value."),
-        );
-        let mut name = PathBuf::new();
-        name.push(path.parent().unwrap_or_else(|| Path::new("/")));
-        if let Some(stem) = path.file_stem() {
-            name.push(stem);
-        }
-        name
-    };
-
     // built-in attractor to use as the "base"
-    let inherit = match matches
+    match matches
         .value_of("preset")
         .expect("we have provided a default value")
     {
-        "poisson-saturne" => Config::poisson_saturne(),
-        "solar-sail" => Config::solar_sail(),
+        "poisson-saturne" => run(Config::poisson_saturne(), &matches, sequence_invalid),
+        "solar-sail" => run(Config::solar_sail(), &matches, sequence_invalid),
         _ => unreachable!("clap validation should not allow any other values. Please report bug."),
     };
+}
+
+fn run(
+    inherit: Config<impl Attractor + Send + Sync + 'static>,
+    matches: &ArgMatches,
+    sequence_invalid: clap::Error,
+) {
     // construct config
     let mut config = Config {
         iterations: matches.value_of_t("iterations").unwrap(),
@@ -427,6 +419,21 @@ fn main() {
         RenderKind::Depth
     } else {
         RenderKind::Gas
+    };
+
+    // get output file name
+    let name = {
+        let path = Path::new(
+            matches
+                .value_of("name")
+                .expect("We provided a default value."),
+        );
+        let mut name = PathBuf::new();
+        name.push(path.parent().unwrap_or_else(|| Path::new("/")));
+        if let Some(stem) = path.file_stem() {
+            name.push(stem);
+        }
+        name
     };
 
     let angle_iter = if let Some(matches) = matches.subcommand_matches("sequence") {
@@ -459,7 +466,7 @@ fn main() {
 
             render(&config, &mut runtime);
             let image = colorize(&config, &runtime);
-            write_image_matches(image, &matches, name, config.silent);
+            write_image_matches(image, matches, name, config.silent);
             runtime.reset();
         }
     } else {
