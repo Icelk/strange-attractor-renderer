@@ -735,6 +735,10 @@ pub fn render(config: &Config<impl Attractor>, runtime: &mut Runtime) {
 
         // do bounds checks
         if i >= width || j >= height || i < 0. || j < 0. {
+            // this is incredibly important:
+            // if we don't set the previous point, if we don't follow the path, even if the point
+            // is outside the viewport, the delta is used in colouring.
+            previous_point = current_point;
             continue;
         }
 
