@@ -788,70 +788,59 @@ pub fn colorize(config: &Config<impl Attractor>, runtime: &Runtime) -> FinalImag
     let bk = config.colors.brighness;
     let mut image = ImageBuffer::new(config.width, config.height);
 
-    #[allow(clippy::cast_lossless)]
-    let u16_max = u16::MAX as f64;
+    let u16_max = f64::from(u16::MAX);
 
-    // if rendering depth, find min and max depth
-    let depth_info = if matches!(config.render, RenderKind::Depth) {
-        Some(
+    // ignore lints
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    match config.render {
+        RenderKind::Gas => {
+            for ((x, y, steps), count) in
+                runtime.steps.enumerate_pixels().zip(runtime.count.pixels())
+            {
+                let color = color(steps.0[0], &config.colors);
+                let [r, g, b] = color.0;
+                // add 1 to both to not get any logs of values under 1.
+                let factor = f64::from(count.0[0] + 1).log(f64::from(runtime.max + 1));
+                let pixel = Rgba([
+                    ((r * factor + bk.offset) * bk.factor * u16_max) as _,
+                    ((g * factor + bk.offset) * bk.factor * u16_max) as _,
+                    ((b * factor + bk.offset) * bk.factor * u16_max) as _,
+                    if config.transparent {
+                        (factor * u16_max) as u16
+                    } else {
+                        u16::MAX
+                    },
+                ]);
+                // safety: `image` has the same size as all the others
+                unsafe { image.unsafe_put_pixel(x, y, pixel) };
+            }
+        }
+        RenderKind::Depth => {
             #[allow(clippy::float_cmp)] // the -1.0 value is set by us
-            runtime
+            let (max, min) = runtime
                 .zbuf
                 .pixels()
                 .map(|pixel| pixel.0[0])
                 .filter(|p| *p != -1.0)
-                .fold((0.0f32, f32::MAX), |(a1, a2), p| (a1.max(p), a2.min(p))),
-        )
-    } else {
-        // Else, don't set the value. This is equivalent to null in other languages.
-        None
-    };
-    // take the tuple of (max, min) and return (max, min, diff), if `depth_info` is Some
-    let depth_info = depth_info.map(|(a, b)| (a, b, (a - b)));
+                .fold((0.0f32, f32::MAX), |(a1, a2), p| (a1.max(p), a2.min(p)));
+            let diff = max - min;
 
-    // ignore lints
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_lossless
-    )]
-    for ((x, y, steps), (count, z)) in runtime
-        .steps
-        .enumerate_pixels()
-        .zip(runtime.count.pixels().zip(runtime.zbuf.pixels()))
-    {
-        let color = color(steps.0[0], &config.colors);
-        let [r, g, b] = color.0;
-        // add 1 to both to not get any logs of values under 1.
-        let factor = ((count.0[0] + 1) as f64).log((runtime.max + 1) as f64);
-        let pixel = match config.render {
-            RenderKind::Gas => Rgba([
-                ((r * factor + bk.offset) * bk.factor * u16_max) as _,
-                ((g * factor + bk.offset) * bk.factor * u16_max) as _,
-                ((b * factor + bk.offset) * bk.factor * u16_max) as _,
-                if config.transparent {
-                    (factor * u16_max) as u16
-                } else {
-                    u16::MAX
-                },
-            ]),
-            RenderKind::Depth => {
+            for (x, y, z) in runtime.zbuf.enumerate_pixels() {
                 let z = z.0[0];
                 #[allow(clippy::float_cmp)]
                 // if z hasn't changed from default, we return 0.
                 let z = if z == -1.0 {
                     0.0
                 } else {
-                    let (_, min, diff) = depth_info.unwrap();
                     // reverse lerp
                     (z - min) / diff
                 };
-                let z = (z * u16::MAX as f32) as u16;
-                Rgba([z, z, z, u16::MAX])
+                let z = (z * f32::from(u16::MAX)) as u16;
+                let pixel = Rgba([z, z, z, u16::MAX]);
+                // safety: `image` has the same size as all the others
+                unsafe { image.unsafe_put_pixel(x, y, pixel) };
             }
-        };
-        // safety: `image` has the same size as all the others
-        unsafe { image.unsafe_put_pixel(x, y, pixel) };
+        }
     }
 
     image
