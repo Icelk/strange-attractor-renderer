@@ -62,7 +62,7 @@ use image::{GenericImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgb, Rgba}
 // used to get random initial points.
 use rand::{Rng, SeedableRng};
 
-pub use config::{Colors, Config, RenderKind, View};
+pub use config::{ColorTransform, Colors, Config, RenderKind, View};
 pub use primitives::{EulerAxisRotation, FloatExt, Vec3};
 
 /// A strange attractor.
@@ -225,8 +225,8 @@ pub mod primitives {
 /// Configuration for rendering - how to get the next iteration, colouring, camera position,
 /// brightness, etc.
 pub mod config {
-    use super::{attractors, Attractor, EulerAxisRotation, Vec3};
-    use std::fmt::{self, Debug};
+    use super::{attractors, Attractor, EulerAxisRotation, Rgb, Vec3};
+    use std::fmt::Debug;
 
     /// How to render the internal data.
     #[derive(Debug, Clone)]
@@ -237,8 +237,18 @@ pub mod config {
         Depth,
     }
 
+    pub trait ColorTransform: Clone + Send + Sync + 'static {
+        /// Please set the attribute `#[inline(always)]`.
+        fn transform(&self, delta: Vec3, screen_space: Vec3, view: &View) -> f64;
+    }
+    impl<F: Fn(Vec3, Vec3, &View) -> f64 + Clone + Send + Sync + 'static> ColorTransform for F {
+        fn transform(&self, delta: Vec3, screen_space: Vec3, view: &View) -> f64 {
+            self(delta, screen_space, view)
+        }
+    }
+
     /// Other data which is dependant on the [`Attractor`].
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     pub struct View {
         /// The position to center the camera on
         ///
@@ -247,25 +257,11 @@ pub mod config {
         pub rotation: EulerAxisRotation,
         /// General viewing scale. Increase this to zoom in more.
         pub scale: f64,
-
-        /// Takes delta, screen space, and settings.
-        pub transform_colors: fn(Vec3, Vec3, &Self) -> f64,
-    }
-
-    impl Debug for View {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("View")
-                .field("center_camera", &self.center_camera)
-                .field("rotation", &self.rotation)
-                .field("scale", &self.scale)
-                .field("transform_colors", &"fn")
-                .finish()
-        }
     }
 
     #[derive(Clone, Debug)]
     #[must_use]
-    pub struct Config<A: Attractor> {
+    pub struct Config<A: Attractor, T: ColorTransform> {
         /// Heavily affects performance
         pub iterations: usize,
         /// Image width, slight performance decrease
@@ -286,9 +282,10 @@ pub mod config {
         pub colors: Colors,
 
         pub view: View,
+        pub color_transform: T,
     }
-    impl<A: Attractor> Config<A> {
-        pub fn new(coefficients: A, view: View) -> Self {
+    impl<A: Attractor, T: ColorTransform> Config<A, T> {
+        pub fn new(coefficients: A, view: View, transform_colors: T) -> Self {
             Self {
                 iterations: 10_000_000,
                 width: 1920,
@@ -304,10 +301,11 @@ pub mod config {
                 colors: Colors::default(),
 
                 view,
+                color_transform: transform_colors,
             }
         }
     }
-    impl Config<attractors::PolynomialSprott2Degree> {
+    impl Config<attractors::PolynomialSprott2Degree, color_transforms::Function> {
         pub fn poisson_saturne() -> Self {
             let coeffs = attractors::PolynomialSprott2Degree {
                 x: [
@@ -348,10 +346,11 @@ pub mod config {
                     rotation: 1.782_681_918_874_46,
                 },
                 scale: 1.,
-                transform_colors: transforms::poisson_saturne,
             };
-            Self::new(coeffs, view)
+            Self::new(coeffs, view, color_transforms::poisson_saturne)
         }
+    }
+    impl Config<attractors::PolynomialSprott2Degree, color_transforms::AdjustedVelocity> {
         pub fn solar_sail() -> Self {
             let coeffs = attractors::PolynomialSprott2Degree {
                 x: [
@@ -374,10 +373,15 @@ pub mod config {
                     rotation: 2.2195,
                 },
                 scale: 1.7,
-
-                transform_colors: transforms::adjusted_velocity,
             };
-            Self::new(coeffs, view)
+            Self::new(
+                coeffs,
+                view,
+                color_transforms::AdjustedVelocity {
+                    factor: -0.2,
+                    offset: 0.8,
+                },
+            )
         }
     }
 
@@ -398,22 +402,88 @@ pub mod config {
         }
     }
 
-    /// Each of the slices should have their last and second to last be the same.
     #[derive(Debug, Clone)]
-    // `TODO`: abstract this as a palette
+    #[must_use]
+    pub struct Palette {
+        list: Vec<Rgb<f64>>,
+        count_f64: f64,
+    }
+    impl Palette {
+        /// # Panics
+        ///
+        /// Panics if `list.is_empty()`.
+        pub fn new(mut list: Vec<Rgb<f64>>) -> Self {
+            list.reserve_exact(1);
+            list.push(*list.last().unwrap());
+            #[allow(clippy::cast_precision_loss)]
+            Self {
+                count_f64: (list.len() - 1) as _,
+                list,
+            }
+        }
+        pub fn from_rgb<const LEN: usize>(r: [f64; LEN], g: [f64; LEN], b: [f64; LEN]) -> Self {
+            let mut colors = Vec::with_capacity(LEN + 1);
+            for i in 0..LEN {
+                colors.push(Rgb([r[i], g[i], b[i]]));
+            }
+            Self::new(colors)
+        }
+        /// Number of colours in this palette.
+        #[inline(always)]
+        #[must_use]
+        pub fn count(&self) -> usize {
+            self.list.len() - 1
+        }
+        /// `value` is position in color wheel, in the range [0..1)
+        /// If `value` is out of that range, it's clamped.
+        #[inline(always)]
+        #[must_use]
+        pub fn interpolate(&self, value: f64) -> Rgb<f64> {
+            let value = if value < 0. {
+                0.
+            } else if value >= 1. {
+                0.999_999
+            } else {
+                value
+            };
+
+            let value = value * self.count_f64;
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let n = (value.floor()) as usize;
+            let sub_n_offset = value % 1.;
+            let sub_n_offset_1 = 1.0 - sub_n_offset;
+
+            // SAFETY: we asserted above that `value` is in an appropriate range for this.
+            let [r1, g1, b1] = unsafe { self.list.get_unchecked(n).0 };
+            let [r2, g2, b2] = unsafe { self.list.get_unchecked(n + 1).0 };
+            Rgb([
+                // lerp between colours
+                //
+                // the lerp is inlined to avoid multiple subtractions, about 3% performance increase
+                // (r[n + 1].lerp(r[n], sub_n_offset)).sqrt(),
+                // (g[n + 1].lerp(g[n], sub_n_offset)).sqrt(),
+                // (b[n + 1].lerp(b[n], sub_n_offset)).sqrt(),
+                //
+                (r2 * sub_n_offset + r1 * sub_n_offset_1).sqrt(),
+                (g2 * sub_n_offset + g1 * sub_n_offset_1).sqrt(),
+                (b2 * sub_n_offset + b1 * sub_n_offset_1).sqrt(),
+            ])
+        }
+    }
+    #[derive(Debug, Clone)]
     pub struct Colors {
-        pub r: [f64; 7],
-        pub g: [f64; 7],
-        pub b: [f64; 7],
+        pub palette: Palette,
 
         pub brighness: BrighnessConstants,
     }
     impl Default for Colors {
         fn default() -> Self {
             Self {
-                r: [1., 0.5, 1., 0.5, 0.5, 1., 1.],
-                g: [1., 1., 0.5, 1., 0.5, 0.5, 0.5],
-                b: [0.5, 0.5, 0.5, 1., 1., 1., 1.],
+                palette: Palette::from_rgb(
+                    [1., 0.5, 1., 0.5, 0.5, 1.],
+                    [1., 1., 0.5, 1., 0.5, 0.5],
+                    [0.5, 0.5, 0.5, 1., 1., 1.],
+                ),
 
                 brighness: BrighnessConstants::default(),
             }
@@ -424,15 +494,24 @@ pub mod config {
     /// Returned values should range between [0..1).
     /// All functions used as [colour transforms](View::transform_colors) must take three
     /// arguments - the Δp, the position in screen space, and the [`View`].
-    pub mod transforms {
-        use super::{Vec3, View};
+    pub mod color_transforms {
+        use super::{ColorTransform, Vec3, View};
         use std::f64::consts::PI;
 
-        #[must_use]
-        #[inline(always)]
-        pub fn adjusted_velocity(delta: Vec3, _screen_space: Vec3, _coeffs: &View) -> f64 {
-            let color = delta.magnitude();
-            (color - 0.2) * 0.8
+        /// The raw function transform.
+        pub type Function = fn(Vec3, Vec3, &View) -> f64;
+
+        /// Calculated as `(delta.magnitude() + offset) * factor`.
+        #[derive(Clone, Debug)]
+        pub struct AdjustedVelocity {
+            pub offset: f64,
+            pub factor: f64,
+        }
+        impl ColorTransform for AdjustedVelocity {
+            #[inline(always)]
+            fn transform(&self, delta: Vec3, _screen_space: Vec3, _view: &View) -> f64 {
+                (delta.magnitude() + self.offset) * self.factor
+            }
         }
         #[must_use]
         #[inline(always)]
@@ -543,35 +622,6 @@ pub mod attractors {
 /// Convenience alias for an 16-bit RGBA image.
 pub type FinalImage = ImageBuffer<Rgba<u16>, Vec<u16>>;
 
-/// `value` is position in color wheel, in the range [0..1)
-#[must_use]
-#[inline(always)]
-pub fn color(value: f64, colors: &Colors) -> Rgb<f64> {
-    let Colors {
-        r,
-        g,
-        b,
-        brighness: _,
-    } = colors;
-    let value = value * 6.;
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let n = (value.floor()) as usize;
-    let sub_n_offset = value % 1.;
-    let sub_n_offset_1 = 1.0 - sub_n_offset;
-    Rgb([
-        // lerp between colours
-        //
-        // the lerp is inlined to avoid multiple subtractions, about 3% performance increase
-        // (r[n + 1].lerp(r[n], sub_n_offset)).sqrt(),
-        // (g[n + 1].lerp(g[n], sub_n_offset)).sqrt(),
-        // (b[n + 1].lerp(b[n], sub_n_offset)).sqrt(),
-        //
-        (r[n + 1] * sub_n_offset + r[n] * sub_n_offset_1).sqrt(),
-        (g[n + 1] * sub_n_offset + g[n] * sub_n_offset_1).sqrt(),
-        (b[n + 1] * sub_n_offset + b[n] * sub_n_offset_1).sqrt(),
-    ])
-}
-
 /// Stores data used by the algorithm.
 ///
 /// This enables us to reuse memory.
@@ -605,7 +655,7 @@ impl Runtime {
         }
     }
     /// Creates a new runtime from the dimensions of [`Config`].
-    pub fn new(config: &Config<impl Attractor>) -> Self {
+    pub fn new(config: &Config<impl Attractor, impl ColorTransform>) -> Self {
         let mut me = Self::empty();
         me.set_width_height(config.width, config.height);
         me.reset();
@@ -692,7 +742,7 @@ impl Runtime {
 ///
 /// `rotation` is around [`View::center_camera`], in radians.
 #[allow(clippy::many_single_char_names)]
-pub fn render(config: &Config<impl Attractor>, runtime: &mut Runtime) {
+pub fn render(config: &Config<impl Attractor, impl ColorTransform>, runtime: &mut Runtime) {
     let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
     // skip first 1000 to get good values in the attractor
     for _ in 0..1000 {
@@ -771,7 +821,9 @@ pub fn render(config: &Config<impl Attractor>, runtime: &mut Runtime) {
 
             // get the colour transformation output, later used in colouring as the index to the
             // palette
-            let value = (config.view.transform_colors)(delta, screen_space, &config.view);
+            let value = config
+                .color_transform
+                .transform(delta, screen_space, &config.view);
             unsafe {
                 runtime.steps.unsafe_put_pixel(i, j, Luma([value]));
 
@@ -784,7 +836,10 @@ pub fn render(config: &Config<impl Attractor>, runtime: &mut Runtime) {
 }
 #[must_use]
 #[allow(clippy::missing_panics_doc)]
-pub fn colorize(config: &Config<impl Attractor>, runtime: &Runtime) -> FinalImage {
+pub fn colorize(
+    config: &Config<impl Attractor, impl ColorTransform>,
+    runtime: &Runtime,
+) -> FinalImage {
     let bk = config.colors.brighness;
     let mut image = ImageBuffer::new(config.width, config.height);
 
@@ -797,7 +852,7 @@ pub fn colorize(config: &Config<impl Attractor>, runtime: &Runtime) -> FinalImag
             for ((x, y, steps), count) in
                 runtime.steps.enumerate_pixels().zip(runtime.count.pixels())
             {
-                let color = color(steps.0[0], &config.colors);
+                let color = config.colors.palette.interpolate(steps.0[0]);
                 let [r, g, b] = color.0;
                 // add 1 to both to not get any logs of values under 1.
                 let factor = f64::from(count.0[0] + 1).log(f64::from(runtime.max + 1));
@@ -848,14 +903,15 @@ pub fn colorize(config: &Config<impl Attractor>, runtime: &Runtime) -> FinalImag
 
 /// Handle to threads and channels to render a config on multiple threads.
 #[must_use]
-pub struct ParallelRenderer<A: Attractor> {
+pub struct ParallelRenderer<A: Attractor, T: ColorTransform> {
     threads: Vec<JoinHandle<()>>,
     render_receiver: mpsc::Receiver<Arc<Mutex<Runtime>>>,
     // `TODO`: make the config we send dynamic and downcast, so we don't have to have this
     // generic.
-    job_sender: watch::WatchSender<Option<(Config<A>, Arc<AtomicUsize>)>>,
+    #[allow(clippy::type_complexity)]
+    job_sender: watch::WatchSender<Option<(Config<A, T>, Arc<AtomicUsize>)>>,
 }
-impl<A: Attractor + Send + Sync + 'static> ParallelRenderer<A> {
+impl<A: Attractor + Send + Sync + 'static, T: ColorTransform> ParallelRenderer<A, T> {
     /// Initiate an appropriate amount of threads and set them up to accept jobs.
     #[allow(clippy::missing_panics_doc)]
     pub fn new() -> Self {
@@ -880,7 +936,7 @@ impl<A: Attractor + Send + Sync + 'static> ParallelRenderer<A> {
                 let runtime = Arc::new(Mutex::new(Runtime::empty()));
 
                 loop {
-                    let (config, job_counter): (Config<_>, Arc<AtomicUsize>) =
+                    let (config, job_counter): (Config<_, _>, Arc<AtomicUsize>) =
                         if let Some(m) = receiver.wait() {
                             m
                         } else {
@@ -945,7 +1001,7 @@ impl<A: Attractor + Send + Sync + 'static> ParallelRenderer<A> {
         }
     }
     /// Send the `job` to all threads.
-    fn send(&mut self, job: Config<A>, job_counter: Arc<AtomicUsize>) {
+    fn send(&mut self, job: Config<A, T>, job_counter: Arc<AtomicUsize>) {
         self.job_sender.send(Some((job, job_counter)));
     }
     /// Blocks on receiving access to the thread's runtimes.
@@ -965,7 +1021,7 @@ impl<A: Attractor + Send + Sync + 'static> ParallelRenderer<A> {
             .for_each(|thread| thread.join().expect("render thread panicked"));
     }
 }
-impl<A: Attractor + Send + Sync + 'static> Default for ParallelRenderer<A> {
+impl<A: Attractor + Send + Sync + 'static, T: ColorTransform> Default for ParallelRenderer<A, T> {
     fn default() -> Self {
         Self::new()
     }
@@ -989,9 +1045,9 @@ impl<A: Attractor + Send + Sync + 'static> Default for ParallelRenderer<A> {
 /// consistently to what the [`render`] method implicitly does.
 #[allow(clippy::missing_panics_doc)] // it won't panic
 #[must_use]
-pub fn render_parallel<A: Attractor + Send + Sync + 'static>(
-    renderer: &mut ParallelRenderer<A>,
-    mut config: Config<A>,
+pub fn render_parallel<A: Attractor + Send + Sync + 'static, T: ColorTransform>(
+    renderer: &mut ParallelRenderer<A, T>,
+    mut config: Config<A, T>,
     jobs_per_thread: usize,
 ) -> FinalImage {
     let iterations = config.iterations;

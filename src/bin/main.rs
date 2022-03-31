@@ -14,7 +14,7 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 // import our library (src/lib.rs)
 use strange_attractor_renderer::config::{BrighnessConstants, Colors, Config, RenderKind};
 use strange_attractor_renderer::{
-    self, colorize, render, render_parallel, Attractor, ParallelRenderer, Runtime,
+    self, colorize, render, render_parallel, Attractor, ColorTransform, ParallelRenderer, Runtime,
 };
 
 /// validate that a argument passed by the user is valid, according to the parsing of type `T`.
@@ -390,7 +390,7 @@ fn main() {
 }
 
 fn run(
-    inherit: Config<impl Attractor + Send + Sync + 'static>,
+    inherit: Config<impl Attractor + Send + Sync + 'static, impl ColorTransform>,
     matches: &ArgMatches,
     sequence_invalid: clap::Error,
 ) {
