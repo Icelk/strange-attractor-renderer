@@ -492,7 +492,7 @@ pub mod config {
 
     /// Transformations for getting the position on the palette used in colouring.
     /// Returned values should range between [0..1).
-    /// All functions used as [colour transforms](View::transform_colors) must take three
+    /// All functions used as [colour transforms](Config::color_transform) must take three
     /// arguments - the Δp, the position in screen space, and the [`View`].
     pub mod color_transforms {
         use super::{ColorTransform, Vec3, View};
