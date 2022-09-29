@@ -17,7 +17,7 @@ rand = { version = "0.8", features = ["small_rng"] }
 watch = { version = "0.2", features = ["parking_lot"] }
 
 # bin
-clap = { version = ">= 3.1, < 4", optional = true, features = ["cargo"] }
+clap = { version = ">= 3.1, < 5", optional = true, features = ["cargo"] }
 clap_autocomplete = { version = "0.2", optional = true }
 
 [features]
