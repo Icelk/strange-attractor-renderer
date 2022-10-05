@@ -6,7 +6,7 @@ use std::process::exit;
 use std::str::FromStr;
 
 // import all the libraries
-use clap::{Arg, ArgGroup, ArgMatches, Command, ValueHint};
+use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command, ValueHint};
 #[cfg(feature = "png")]
 use image::codecs::png;
 use image::codecs::{bmp, pnm};
@@ -49,10 +49,7 @@ fn write_image_matches(
     if !silent {
         println!("Converting image format.");
     }
-    let image = match (
-        matches.is_present("transparent"),
-        matches.is_present("8bit"),
-    ) {
+    let image = match (matches.get_flag("transparent"), matches.get_flag("8bit")) {
         (true, false) => image,
         (false, false) => image.to_rgb16().into(),
         (true, true) => image.to_rgba8().into(),
@@ -64,14 +61,14 @@ fn write_image_matches(
     }
     let f = || {
         // writing file, depending on extension.
-        if matches.is_present("pam") {
+        if matches.get_flag("pam") {
             name.set_extension("pam");
             let mut file = file(&name);
 
             let codec = pnm::PnmEncoder::new(&mut file).with_subtype(pnm::PnmSubtype::ArbitraryMap);
             write_image(codec, image);
             return;
-        } else if matches.is_present("bmp") {
+        } else if matches.get_flag("bmp") {
             name.set_extension("bmp");
             let mut file = file(&name);
 
@@ -189,18 +186,21 @@ fn main() {
         .arg(
             Arg::new("depth")
                 .long("depth")
+                .action(ArgAction::SetTrue)
                 .help("output depth information"),
         )
         .arg(
             Arg::new("8bit")
                 .long("8-bit")
                 .short('8')
+                .action(ArgAction::SetTrue)
                 .help("Write image in an 8-bit format"),
         )
         .arg(
             Arg::new("transparent")
                 .long("transparent")
                 .short('t')
+                .action(ArgAction::SetTrue)
                 .help("Add transparency to the image"),
         )
         .arg(
@@ -209,7 +209,7 @@ fn main() {
                 .short('i')
                 .value_hint(ValueHint::Other)
                 .help("Number of iterations")
-                .validator(parse_validate::<usize>)
+                .value_parser(parse_validate::<usize>)
                 .default_value("10000000"),
         )
         .arg(
@@ -218,16 +218,16 @@ fn main() {
                 .short('w')
                 .value_hint(ValueHint::Other)
                 .help("Width of image")
-                .validator(parse_validate::<u32>)
+                .value_parser(parse_validate::<u32>)
                 .default_value("1920"),
         )
         .arg(
             Arg::new("height")
                 .long("height")
-                .short('h')
+                .short('v')
                 .value_hint(ValueHint::Other)
                 .help("Height of image")
-                .validator(parse_validate::<u32>)
+                .value_parser(parse_validate::<u32>)
                 .default_value("1080"),
         )
         .arg(
@@ -235,7 +235,10 @@ fn main() {
                 .long("preset")
                 .short('p')
                 .help("Which built-in attractor to render")
-                .possible_values(["poisson-saturne", "solar-sail"])
+                .value_parser(clap::builder::PossibleValuesParser::new([
+                    "poisson-saturne",
+                    "solar-sail",
+                ]))
                 .default_value("poisson-saturne"),
         )
         .group(
@@ -247,6 +250,7 @@ fn main() {
         .arg(
             Arg::new("pam")
                 .long("pam")
+                .action(ArgAction::SetTrue)
                 .help("Use PAM format, a bitmap-like format. 16-bit images are not supported.")
                 .alias("pnm")
                 .alias("pbm"),
@@ -254,6 +258,7 @@ fn main() {
         .arg(
             Arg::new("bmp")
                 .long("bmp")
+                .action(ArgAction::SetTrue)
                 .help("Use BMP format. 16-bit images are not supported.")
                 .alias("bitmap"),
         )
@@ -269,12 +274,14 @@ fn main() {
             Arg::new("singlethread")
                 .long("single-thread")
                 .short('s')
+                .action(ArgAction::SetTrue)
                 .help("Run on single thread"),
         )
         .arg(
             Arg::new("silent")
                 .long("silent")
                 .short('q')
+                .action(ArgAction::SetTrue)
                 .help("Decrease verbosity"),
         )
         .arg(
@@ -283,7 +290,7 @@ fn main() {
                 .short('j')
                 .conflicts_with("singlethread")
                 .help(jobs_per_thread_help)
-                .validator(parse_validate::<NonZeroUsize>)
+                .value_parser(parse_validate::<NonZeroUsize>)
                 .value_hint(ValueHint::Other)
                 .default_value("12"),
         )
@@ -293,7 +300,7 @@ fn main() {
                 .short('a')
                 .help("Angle to view attractor from (degrees)")
                 .value_hint(ValueHint::Other)
-                .validator(parse_validate::<f64>)
+                .value_parser(parse_validate::<f64>)
                 .allow_hyphen_values(true)
                 .default_value("0"),
         )
@@ -305,7 +312,7 @@ fn main() {
                 .default_value("-0.15")
                 .value_hint(ValueHint::Other)
                 .allow_hyphen_values(true)
-                .validator(parse_validate::<f64>),
+                .value_parser(parse_validate::<f64>),
         )
         .subcommand(
             Command::new("sequence")
@@ -327,7 +334,7 @@ fn main() {
                         .short('e')
                         .help("The angle to end the animation at (degrees)")
                         .value_hint(ValueHint::Other)
-                        .validator(parse_validate::<f64>)
+                        .value_parser(parse_validate::<f64>)
                         .default_value("360"),
                 )
                 .arg(
@@ -336,10 +343,10 @@ fn main() {
                         .short('d')
                         .help("Amount to change the angle for each frame (degrees)")
                         .value_hint(ValueHint::Other)
-                        .validator::<_, _, String>(|v| {
+                        .value_parser(|v: &str| {
                             let v = parse_validate::<f64>(v)?;
                             if v <= 0. {
-                                Err("step must be a positive".into())
+                                Err("step must be a positive".to_owned())
                             } else {
                                 Ok(())
                             }
@@ -355,7 +362,7 @@ fn main() {
     }
 
     let sequence_invalid = command.error(
-        clap::ErrorKind::InvalidValue,
+        clap::error::ErrorKind::InvalidValue,
         "sequence end must be after start",
     );
 
@@ -380,8 +387,9 @@ fn main() {
 
     // built-in attractor to use as the "base"
     match matches
-        .value_of("preset")
+        .get_one::<String>("preset")
         .expect("we have provided a default value")
+        .as_str()
     {
         "poisson-saturne" => run(Config::poisson_saturne(), &matches, sequence_invalid),
         "solar-sail" => run(Config::solar_sail(), &matches, sequence_invalid),
@@ -396,26 +404,26 @@ fn run(
 ) {
     // construct config
     let mut config = Config {
-        iterations: matches.value_of_t("iterations").unwrap(),
-        width: matches.value_of_t("width").unwrap(),
-        height: matches.value_of_t("height").unwrap(),
+        iterations: *matches.get_one("iterations").unwrap(),
+        width: *matches.get_one("width").unwrap(),
+        height: *matches.get_one("height").unwrap(),
 
-        transparent: matches.is_present("transparent"),
+        transparent: matches.get_flag("transparent"),
         colors: Colors {
             brighness: BrighnessConstants {
-                offset: matches
-                    .value_of_t("brightness_offset")
+                offset: *matches
+                    .get_one("brightness_offset")
                     .expect("we have a default value and validated the input"),
                 ..Default::default()
             },
             ..Default::default()
         },
 
-        silent: matches.is_present("silent"),
+        silent: matches.get_flag("silent"),
 
         ..inherit
     };
-    config.render = if matches.is_present("depth") {
+    config.render = if matches.get_flag("depth") {
         RenderKind::Depth
     } else {
         RenderKind::Gas
@@ -425,7 +433,7 @@ fn run(
     let name = {
         let path = Path::new(
             matches
-                .value_of("name")
+                .get_one::<String>("name")
                 .expect("We provided a default value."),
         );
         let mut name = PathBuf::new();
@@ -437,14 +445,14 @@ fn run(
     };
 
     let angle_iter = if let Some(matches) = matches.subcommand_matches("sequence") {
-        let start = matches
-            .value_of_t("start")
+        let start = *matches
+            .get_one("start")
             .expect("we have a default value and validated the input");
-        let end = matches
-            .value_of_t("end")
+        let end = *matches
+            .get_one("end")
             .expect("we have a default value and validated the input");
-        let step = matches
-            .value_of_t("step")
+        let step = *matches
+            .get_one("step")
             .expect("we have a default value and validated the input");
         if end <= start {
             sequence_invalid.exit();
@@ -452,14 +460,14 @@ fn run(
         AngleIter::new(start, end, step, name)
     } else {
         // get viewing angle
-        let angle: f64 = matches
-            .value_of_t("angle")
+        let angle: f64 = *matches
+            .get_one("angle")
             .expect("we have a default value and validated the input");
         AngleIter::new(angle, angle, 1., name)
     };
 
     // render image
-    if matches.is_present("singlethread") {
+    if matches.get_flag("singlethread") {
         let mut runtime = Runtime::new(&config);
         for (angle, name) in angle_iter {
             config.angle = angle;
@@ -480,7 +488,7 @@ fn run(
                 &mut renderer,
                 config.clone(),
                 matches
-                    .value_of_t::<NonZeroUsize>("jobs_per_thread")
+                    .get_one::<NonZeroUsize>("jobs_per_thread")
                     .expect("we have a default value and validated the input")
                     .get(),
             );
