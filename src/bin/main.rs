@@ -326,6 +326,7 @@ fn main() {
                         .short('s')
                         .help("The angle to start the animation from (degrees)")
                         .value_hint(ValueHint::Other)
+                        .value_parser(parse_validate::<f64>)
                         .default_value("0"),
                 )
                 .arg(
@@ -348,7 +349,7 @@ fn main() {
                             if v <= 0. {
                                 Err("step must be a positive".to_owned())
                             } else {
-                                Ok(())
+                                Ok(v)
                             }
                         })
                         .default_value("0.5"),
