@@ -11,31 +11,20 @@ jobs:
         runs-on: ubuntu-latest
         steps:
             - name: Checking out sources
-              uses: actions/checkout@v1
+              uses: actions/checkout@v3
             - name: Installing Rust toolchain
-              uses: actions-rs/toolchain@v1
-              with:
-                  toolchain: stable
-                  override: true
-            - uses: Swatinem/rust-cache@v1
+              run: rustup toolchain install stable
+            - uses: Swatinem/rust-cache@v2
             - name: Checking formatting
-              uses: actions-rs/cargo@v1
-              with:
-                  command: fmt
-                  args: -- --check
+              run: cargo fmt --check
             - name: Checking lints with all features
-              uses: actions-rs/cargo@v1
-              with:
-                  command: clippy
-                  args: --all-targets --all-features -- -D warnings
+              run: cargo clippy --all-targets --all-features -- -D warnings
             - name: Checking doc references
               uses: Icelk/rustdoc-link-check@v1
               with:
                   private: true
             - name: Testing project
-              uses: actions-rs/cargo@v1
-              with:
-                  command: test
+              run: cargo test
 
     build:
         needs: [check]
@@ -44,18 +33,12 @@ jobs:
             - name: Checking out sources
               uses: actions/checkout@v1
             - name: Installing Rust toolchain
-              uses: actions-rs/toolchain@v1
-              with:
-                  toolchain: stable
-                  profile: minimal
-            - uses: Swatinem/rust-cache@v1
+              run: rustup toolchain install stable --profile minimal
+            - uses: Swatinem/rust-cache@v2
             - name: Compiling
-              uses: actions-rs/cargo@v1
-              with:
-                  command: rustc
-                  args: --profile production
+              run: cargo rustc --profile production
             - name: Upload bin artefact
-              uses: actions/upload-artifact@v2
+              uses: actions/upload-artifact@v3
               with:
                   name: strange-attractor-renderer
                   path: target/production/strange-attractor-renderer
