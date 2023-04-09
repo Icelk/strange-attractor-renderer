@@ -183,6 +183,8 @@ fn main() {
         "Offset the brightness. You generally want to decrease this if you have > 1e8 iterations.";
 
     let mut command = Command::new("strange-attractor-renderer")
+        .disable_help_flag(true)
+        .arg(Arg::new("help").long("help").action(ArgAction::Help))
         .arg(
             Arg::new("depth")
                 .long("depth")
@@ -224,7 +226,7 @@ fn main() {
         .arg(
             Arg::new("height")
                 .long("height")
-                .short('v')
+                .short('h')
                 .value_hint(ValueHint::Other)
                 .help("Height of image")
                 .value_parser(parse_validate::<u32>)
