@@ -233,6 +233,14 @@ fn main() {
                 .default_value("1080"),
         )
         .arg(
+            Arg::new("scale")
+                .short('s')
+                .long("scale")
+                .help("Image zoom")
+                .default_value("1")
+                .value_parser(parse_validate::<f64>),
+        )
+        .arg(
             Arg::new("preset")
                 .long("preset")
                 .short('p')
@@ -426,6 +434,7 @@ fn run(
 
         ..inherit
     };
+    config.view.scale = *matches.get_one("scale").expect("we provided a default");
     config.render = if matches.get_flag("depth") {
         RenderKind::Depth
     } else {
