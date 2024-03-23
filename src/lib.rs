@@ -515,6 +515,7 @@ pub mod config {
         }
         #[must_use]
         #[inline(always)]
+        #[allow(clippy::doc_markdown)]
         pub fn poisson_saturne(delta: Vec3, screen_space: Vec3, coeffs: &View) -> f64 {
             #[inline(always)]
             fn part(p: Vec3, coeffs: &View) -> f64 {
