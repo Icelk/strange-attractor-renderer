@@ -31,7 +31,7 @@ fn write_image(encoder: impl image::ImageEncoder, image: DynamicImage) {
             image.as_bytes(),
             image.width(),
             image.height(),
-            image.color(),
+            image.color().into(),
         )
         .unwrap();
 }

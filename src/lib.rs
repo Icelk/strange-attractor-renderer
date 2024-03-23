@@ -515,6 +515,7 @@ pub mod config {
         }
         #[must_use]
         #[inline(always)]
+        #[allow(clippy::doc_markdown)]
         pub fn poisson_saturne(delta: Vec3, screen_space: Vec3, coeffs: &View) -> f64 {
             #[inline(always)]
             fn part(p: Vec3, coeffs: &View) -> f64 {
@@ -1014,6 +1015,7 @@ impl<A: Attractor + Send + Sync + 'static, T: ColorTransform> ParallelRenderer<A
         self.threads.len()
     }
     /// Wait for all threads to finish.
+    #[allow(clippy::missing_panics_doc)]
     pub fn shutdown(self) {
         self.job_sender.send(None);
         self.threads
