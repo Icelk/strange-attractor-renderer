@@ -1014,6 +1014,7 @@ impl<A: Attractor + Send + Sync + 'static, T: ColorTransform> ParallelRenderer<A
         self.threads.len()
     }
     /// Wait for all threads to finish.
+    #[allow(clippy::missing_panics_doc)]
     pub fn shutdown(self) {
         self.job_sender.send(None);
         self.threads
