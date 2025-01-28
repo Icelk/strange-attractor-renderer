@@ -158,9 +158,10 @@ pub mod primitives {
         }
     }
     /// enables using `rng.gen` to get a Vec3, with x,y,z between 0 and 1
-    impl rand::distributions::Distribution<Vec3> for rand::distributions::Standard {
+    impl rand::distr::Distribution<Vec3> for rand::distr::StandardUniform {
         fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Vec3 {
-            Vec3::new(rng.gen(), rng.gen(), rng.gen())
+            let values: [f64; 3] = rng.random();
+            Vec3::new(values[0], values[1], values[2])
         }
     }
 
@@ -652,7 +653,7 @@ impl Runtime {
             zbuf: ImageBuffer::new(0, 0),
             max: 0,
 
-            rng: rand::rngs::SmallRng::from_entropy(),
+            rng: rand::rngs::SmallRng::from_os_rng(),
         }
     }
     /// Creates a new runtime from the dimensions of [`Config`].
@@ -744,7 +745,7 @@ impl Runtime {
 /// `rotation` is around [`View::center_camera`], in radians.
 #[allow(clippy::many_single_char_names)]
 pub fn render(config: &Config<impl Attractor, impl ColorTransform>, runtime: &mut Runtime) {
-    let mut initial_point = runtime.rng.gen::<Vec3>() * 0.1;
+    let mut initial_point = runtime.rng.random::<Vec3>() * 0.1;
     // skip first 1000 to get good values in the attractor
     for _ in 0..1000 {
         initial_point = config.attractor.next_point(initial_point);
