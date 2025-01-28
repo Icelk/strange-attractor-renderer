@@ -13,7 +13,7 @@ required-features = ["bin"]
 
 [dependencies]
 image = { version = "0.25", default-features = false }
-rand = { version = "0.8", features = ["small_rng"] }
+rand = { version = "0.9", features = ["small_rng"] }
 watch = { version = "0.2", features = ["parking_lot"] }
 
 # bin
